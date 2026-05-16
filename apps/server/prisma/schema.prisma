@@ -1,0 +1,65 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email        String     @unique
+  passwordHash String     @map("password_hash")
+  displayName  String     @map("display_name")
+  avatarUrl    String?    @map("avatar_url")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  rooms        Room[]     @relation("HostRooms")
+  participants Participant[]
+  messages     Message[]
+
+  @@map("users")
+}
+
+model Room {
+  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  hostId    String?       @map("host_id") @db.Uuid
+  roomCode  String        @map("room_code") @unique
+  name      String?
+  isActive  Boolean       @default(true) @map("is_active")
+  createdAt DateTime      @default(now()) @map("created_at")
+  endedAt   DateTime?     @map("ended_at")
+  host      User?         @relation("HostRooms", fields: [hostId], references: [id])
+  participants Participant[]
+  messages   Message[]
+
+  @@map("rooms")
+}
+
+model Participant {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId     String   @map("room_id") @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  joinedAt   DateTime @default(now()) @map("joined_at")
+  leftAt     DateTime? @map("left_at")
+  isMuted    Boolean  @default(false) @map("is_muted")
+  isCameraOff Boolean @default(false) @map("is_camera_off")
+
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("participants")
+}
+
+model Message {
+  id      String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId  String   @map("room_id") @db.Uuid
+  userId  String?  @map("user_id") @db.Uuid
+  content String
+  sentAt  DateTime @default(now()) @map("sent_at")
+
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("messages")
+}
