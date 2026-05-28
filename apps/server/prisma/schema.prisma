@@ -13,23 +13,84 @@ model User {
   passwordHash String     @map("password_hash")
   displayName  String     @map("display_name")
   avatarUrl    String?    @map("avatar_url")
+  bio          String?    @map("bio")
+  phoneNumber  String?    @map("phone_number")
+  location     String?    @map("location")
+  isOnline     Boolean    @default(false) @map("is_online")
+  lastSeenAt   DateTime   @default(now()) @map("last_seen_at") @db.Timestamptz(6)
   createdAt    DateTime   @default(now()) @map("created_at")
   rooms        Room[]     @relation("HostRooms")
+  groupsCreated Group[]   @relation("GroupCreator")
+  groupMemberships GroupMember[]
   participants Participant[]
   messages     Message[]
 
   @@map("users")
 }
 
+model PendingRegistration {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email        String   @unique
+  displayName  String   @map("display_name")
+  passwordHash String   @map("password_hash")
+  otpHash      String   @map("otp_hash")
+  otpExpiresAt DateTime @map("otp_expires_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("pending_registrations")
+}
+
+model PendingPasswordReset {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email        String   @unique
+  otpHash      String   @map("otp_hash")
+  otpExpiresAt DateTime @map("otp_expires_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("pending_password_resets")
+}
+
+model Group {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String   @db.VarChar(100)
+  description String?
+  avatarUrl   String?  @map("avatar_url") @db.VarChar
+  createdBy   String?  @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  isActive    Boolean  @default(true) @map("is_active")
+
+  creator User? @relation("GroupCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  members GroupMember[]
+  rooms   Room[]
+
+  @@map("groups")
+}
+
+model GroupMember {
+  id       String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  groupId  String   @map("group_id") @db.Uuid
+  userId   String   @map("user_id") @db.Uuid
+  role     String   @default("member") @db.VarChar(20)
+  joinedAt DateTime @default(now()) @map("joined_at") @db.Timestamptz(6)
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@map("group_members")
+}
+
 model Room {
   id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   hostId    String?       @map("host_id") @db.Uuid
+  groupId   String?       @map("group_id") @db.Uuid
   roomCode  String        @map("room_code") @unique
   name      String?
   isActive  Boolean       @default(true) @map("is_active")
   createdAt DateTime      @default(now()) @map("created_at")
   endedAt   DateTime?     @map("ended_at")
   host      User?         @relation("HostRooms", fields: [hostId], references: [id])
+  group     Group?        @relation(fields: [groupId], references: [id], onDelete: SetNull)
   participants Participant[]
   messages   Message[]
 
