@@ -24,6 +24,7 @@ model User {
   groupMemberships GroupMember[]
   participants Participant[]
   messages     Message[]
+  meetingMinutesCreated MeetingMinute[]
 
   @@map("users")
 }
@@ -58,10 +59,12 @@ model Group {
   createdBy   String?  @map("created_by") @db.Uuid
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   isActive    Boolean  @default(true) @map("is_active")
+  summarizerEnabled Boolean @default(false) @map("summarizer_enabled")
 
   creator User? @relation("GroupCreator", fields: [createdBy], references: [id], onDelete: SetNull)
   members GroupMember[]
   rooms   Room[]
+  meetingMinutes MeetingMinute[]
 
   @@map("groups")
 }
@@ -93,6 +96,7 @@ model Room {
   group     Group?        @relation(fields: [groupId], references: [id], onDelete: SetNull)
   participants Participant[]
   messages   Message[]
+  meetingMinutes MeetingMinute[]
 
   @@map("rooms")
 }
@@ -123,4 +127,23 @@ model Message {
   user User? @relation(fields: [userId], references: [id])
 
   @@map("messages")
+}
+
+model MeetingMinute {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId           String   @map("room_id") @db.Uuid
+  groupId          String   @map("group_id") @db.Uuid
+  createdBy        String?  @map("created_by") @db.Uuid
+  title            String   @db.VarChar(200)
+  rawTranscript    String   @map("raw_transcript")
+  summaryMarkdown  String   @map("summary_markdown")
+  durationSeconds  Int      @map("duration_seconds")
+  participantCount Int      @map("participant_count")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  room           Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  group          Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdByUser  User?  @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@map("meeting_minutes")
 }

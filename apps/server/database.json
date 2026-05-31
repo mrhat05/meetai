@@ -1,0 +1,8 @@
+{
+  "dev": {
+    "url": "postgres://e405d671ab7281db6e5ad06f9664c1b1ea7edf26296cab858b61d49d5cbb5310:sk_F0ZGiqxH4CyAV3yuE70rS@pooled.db.prisma.io:5432/postgres?sslmode=require",
+    "ssl": {
+      "sslmode": "require"
+    }
+  }
+}

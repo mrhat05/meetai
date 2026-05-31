@@ -8,8 +8,14 @@ type GroupMeetingAlert = {
   roomCode: string;
 };
 
+type MinutesReadyAlert = {
+  groupId: string;
+  minutesId: string;
+};
+
 type ServerToClientEvents = {
   'group-meeting-started': (payload: GroupMeetingAlert) => void;
+  'minutes-ready': (payload: MinutesReadyAlert) => void;
 };
 
 type ClientToServerEvents = Record<string, never>;
@@ -55,6 +61,7 @@ function getAccessToken() {
 
 export default function useGroupMeetingAlert() {
   const [activeMeetingAlert, setActiveMeetingAlert] = useState<GroupMeetingAlert | null>(null);
+  const [minutesReadyAlert, setMinutesReadyAlert] = useState<MinutesReadyAlert | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -70,10 +77,16 @@ export default function useGroupMeetingAlert() {
       setActiveMeetingAlert(payload);
     };
 
+    const handleMinutesReady = (payload: MinutesReadyAlert) => {
+      setMinutesReadyAlert(payload);
+    };
+
     socket.on('group-meeting-started', handleGroupMeetingStarted);
+    socket.on('minutes-ready', handleMinutesReady);
 
     return () => {
       socket.off('group-meeting-started', handleGroupMeetingStarted);
+      socket.off('minutes-ready', handleMinutesReady);
       socket.disconnect();
     };
   }, []);
@@ -82,5 +95,5 @@ export default function useGroupMeetingAlert() {
     setActiveMeetingAlert(null);
   };
 
-  return { activeMeetingAlert, dismissAlert };
+  return { activeMeetingAlert, minutesReadyAlert, dismissAlert };
 }

@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import useLocalStream from '@/hooks/useLocalStream';
 import useWebRTC from '@/hooks/useWebRTC';
+import useAudioRecorder from '@/hooks/useAudioRecorder';
 import VideoTile from '@/components/VideoTile';
 
 type RoomShellProps = {
@@ -14,6 +15,9 @@ type RoomShellProps = {
 type RoomDetails = {
   hostId: string | null;
   group_name: string | null;
+  group: {
+    summarizer_enabled: boolean;
+  } | null;
 };
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -34,6 +38,7 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
   const router = useRouter();
   const { stream: localStream, isVideoOn, isAudioOn, mediaError, toggleVideo, toggleAudio } = useLocalStream();
   const { peers, peerPresence, connectedPeerIds, messages, sendMessage } = useWebRTC(roomCode, localStream, isVideoOn);
+  const { startRecording, stopRecording } = useAudioRecorder();
   const [isHost, setIsHost] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isEndingCall, setIsEndingCall] = useState(false);
@@ -41,7 +46,12 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
   const [userDisplayName, setUserDisplayName] = useState('You');
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null);
   const [groupName, setGroupName] = useState<string | null>(null);
+  const [summarizerEnabled, setSummarizerEnabled] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [tilePage, setTilePage] = useState(0);
+  const summaryUploadPromiseRef = useRef<Promise<boolean> | null>(null);
+  const summaryUploadedRef = useRef(false);
+  const recordingStartedRef = useRef(false);
 
   const peerEntries = useMemo(() => Array.from(peers.entries()), [peers]);
   const peersWithoutMedia = useMemo(() => connectedPeerIds.filter((peerId) => !peers.has(peerId)), [connectedPeerIds, peers]);
@@ -88,6 +98,29 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
       setTilePage(pageCount - 1);
     }
   }, [pageCount, tilePage]);
+
+  useEffect(() => {
+    if (!toastMessage) return undefined;
+
+    const timeoutId = window.setTimeout(() => {
+      setToastMessage(null);
+    }, 2000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [toastMessage]);
+
+  useEffect(() => {
+    if (!summarizerEnabled || recordingStartedRef.current) {
+      return;
+    }
+
+    recordingStartedRef.current = true;
+
+    void startRecording().catch((error) => {
+      recordingStartedRef.current = false;
+      console.error('Failed to start audio recording', error);
+    });
+  }, [startRecording, summarizerEnabled]);
 
   useEffect(() => {
     const getUserInfoFromToken = () => {
@@ -150,6 +183,7 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
             const response = await api.get<RoomDetails>(`/rooms/${roomCode}`);
             setIsHost(response.data?.hostId === userId);
             setGroupName(response.data?.group_name ?? null);
+            setSummarizerEnabled(Boolean(response.data?.group?.summarizer_enabled));
             return;
           } catch (lookupError: any) {
             lastError = lookupError;
@@ -171,11 +205,75 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
     void loadRoomRole();
   }, [roomCode]);
 
+  const finalizeMeetingSummary = useCallback(
+    async ({ showToast }: { showToast: boolean }) => {
+      if (!summarizerEnabled || !isHost) {
+        return false;
+      }
+
+      if (summaryUploadedRef.current) {
+        return true;
+      }
+
+      if (!summaryUploadPromiseRef.current) {
+        summaryUploadPromiseRef.current = (async () => {
+          if (showToast) {
+            setToastMessage('Generating meeting summary...');
+          }
+
+          const audioBlob = await stopRecording();
+          if (!audioBlob) {
+            return false;
+          }
+
+          const formData = new FormData();
+          formData.append('audio', audioBlob, 'meeting.webm');
+
+          await api.post(`/rooms/${roomCode}/end-with-summary`, formData);
+          summaryUploadedRef.current = true;
+
+          return true;
+        })();
+      }
+
+      try {
+        return await summaryUploadPromiseRef.current;
+      } finally {
+        summaryUploadPromiseRef.current = null;
+      }
+    },
+    [isHost, roomCode, stopRecording, summarizerEnabled]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (summarizerEnabled && isHost) {
+        void finalizeMeetingSummary({ showToast: false }).catch((error) => {
+          console.error('Failed to finalize meeting summary on unmount', error);
+        });
+        return;
+      }
+
+      void stopRecording().catch((error) => {
+        console.error('Failed to stop audio recording on unmount', error);
+      });
+    };
+  }, [finalizeMeetingSummary, isHost, stopRecording, summarizerEnabled]);
+
   const handleEndCall = async () => {
     setIsEndingCall(true);
 
     try {
-      await api.post(`/rooms/${roomCode}/end`);
+      if (summarizerEnabled && isHost) {
+        const summaryGenerated = await finalizeMeetingSummary({ showToast: true });
+
+        if (!summaryGenerated) {
+          await api.post(`/rooms/${roomCode}/end`);
+        }
+      } else {
+        await api.post(`/rooms/${roomCode}/end`);
+      }
+
       router.push('/dashboard');
     } catch (error) {
       console.error('Failed to end call', error);
@@ -197,6 +295,12 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden app-root text-white">
+      {toastMessage && (
+        <div className="fixed left-1/2 top-6 z-50 -translate-x-1/2 rounded-full border border-amber-300/30 bg-amber-400/20 px-4 py-3 text-sm font-medium text-amber-50 shadow-xl shadow-black/25 backdrop-blur-md">
+          {toastMessage}
+        </div>
+      )}
+
       <header className="border-b px-6 py-4" style={{ borderColor: 'var(--border)', background: 'linear-gradient(180deg, rgba(255,255,255,0.02), transparent)' }}>
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 rounded-2xl border px-5 py-4" style={{ borderColor: 'var(--border)', background: 'rgba(255,255,255,0.012)' }}>
           <div>

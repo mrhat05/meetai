@@ -1,10 +1,35 @@
 import { Router } from 'express';
+import multer from 'multer';
 import type { Request, Response } from 'express';
-import { randomBytes } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
+import { randomBytes, randomUUID } from 'node:crypto';
 import db from '../../db.js';
 import { authMiddleware } from '../../middleware/authMiddleware.js';
+import transcriptionService from '../services/transcriptionService.js';
+import summarizationService from '../services/summarizationService.js';
+import minutesService from '../services/minutesService.ts';
+import { emitToUser } from '../socket/presence.ts';
 
 const router = Router();
+const AUDIO_UPLOAD_DIR =
+  process.env.AUDIO_UPLOAD_DIR?.trim() || path.resolve(process.cwd(), 'tmp', 'audio-uploads');
+
+mkdirSync(AUDIO_UPLOAD_DIR, { recursive: true });
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, callback) => {
+      callback(null, AUDIO_UPLOAD_DIR);
+    },
+    filename: (_req, _file, callback) => {
+      callback(null, `${randomUUID()}.webm`);
+    },
+  }),
+  limits: {
+    fileSize: 50 * 1024 * 1024,
+  },
+});
 
 const ROOM_CODE_LENGTH = 8;
 const ROOM_CODE_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -125,12 +150,13 @@ router.get('/:roomCode', authMiddleware, async (req: Request, res: Response) => 
   try {
     const { roomCode } = req.params as { roomCode: string };
 
-    const room = await db.room.findUnique({
+    const room = await (db as any).room.findUnique({
       where: { roomCode },
       include: {
         group: {
           select: {
             name: true,
+            summarizerEnabled: true,
           },
         },
         host: {
@@ -151,10 +177,102 @@ router.get('/:roomCode', authMiddleware, async (req: Request, res: Response) => 
     return res.json({
       ...room,
       group_name: room.group?.name ?? null,
+      group: room.group
+        ? {
+            summarizer_enabled: room.group.summarizerEnabled,
+          }
+        : null,
     });
   } catch (error) {
     console.error('Error fetching room:', error);
     return res.status(500).json({ error: 'Failed to fetch room' });
+  }
+});
+
+// POST /rooms/:roomCode/end-with-summary — Host ends room and stores AI summary
+router.post('/:roomCode/end-with-summary', authMiddleware, upload.single('audio'), async (req: Request, res: Response) => {
+  try {
+    const { roomCode } = req.params as { roomCode: string };
+    const audioFile = (req as Request & { file?: Express.Multer.File | undefined }).file;
+
+    if (!audioFile?.path) {
+      return res.status(400).json({ error: 'audio file is required' });
+    }
+
+    const room = await (db as any).room.findUnique({
+      where: { roomCode },
+      include: {
+        group: {
+          select: {
+            name: true,
+          },
+        },
+      },
+    });
+
+    if (!room) {
+      return res.status(404).json({ error: 'Room not found' });
+    }
+
+    if (room.hostId !== req.user!.userId) {
+      return res.status(403).json({ error: 'Only host can end room' });
+    }
+
+    if (!room.groupId || !room.group?.name) {
+      return res.status(400).json({ error: 'Meeting summaries require a group room' });
+    }
+
+    const endedAt = new Date();
+    await (db as any).room.update({
+      where: { id: room.id },
+      data: {
+        isActive: false,
+        endedAt,
+      },
+    });
+
+    const durationSeconds = Math.max(1, Math.round((endedAt.getTime() - room.createdAt.getTime()) / 1000));
+    const participantCount = await (db as any).participant.count({ where: { roomId: room.id } });
+    const transcript = await transcriptionService.transcribeAudio(audioFile.path);
+    const roomLabel = room.group.name || `Room ${room.roomCode}`;
+    const summaryMarkdown = await summarizationService.summarizeMeeting({
+      transcript,
+      groupName: roomLabel,
+      durationSeconds,
+      participantCount,
+    });
+
+    const minutesId = await minutesService.saveMinutes({
+      roomId: room.id,
+      groupId: room.groupId,
+      createdBy: req.user!.userId,
+      groupName: roomLabel,
+      transcript,
+      summaryMarkdown,
+      durationSeconds,
+      participantCount,
+    });
+
+    const groupMemberRows = await db.$queryRaw<Array<{ user_id: string }>>`
+      SELECT gm."user_id"
+      FROM "group_members" gm
+      WHERE gm."group_id" = ${room.groupId}::uuid
+    `;
+
+    for (const member of groupMemberRows) {
+      emitToUser(member.user_id, 'minutes-ready', {
+        groupId: room.groupId,
+        minutesId,
+      });
+    }
+
+    return res.json({
+      success: true,
+      minutesId,
+    });
+  } catch (error) {
+    console.error('Error ending room with summary:', error);
+    return res.status(500).json({ error: 'Failed to end room with summary' });
   }
 });
 

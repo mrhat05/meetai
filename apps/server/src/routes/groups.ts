@@ -13,6 +13,12 @@ type CreateGroupBody = {
   description?: string;
 };
 
+type UpdateGroupBody = {
+  name?: string;
+  description?: string | null;
+  summarizer_enabled?: boolean;
+};
+
 type GroupResponse = {
   id: string;
   name: string;
@@ -45,6 +51,7 @@ type GroupDetails = {
   created_by: string | null;
   created_at: Date;
   is_active: boolean;
+  summarizer_enabled: boolean;
 };
 
 type GroupMemberItem = {
@@ -54,6 +61,27 @@ type GroupMemberItem = {
   joined_at: Date;
   display_name: string;
   avatar_url: string | null;
+};
+
+type GroupMinuteListItem = {
+  id: string;
+  title: string;
+  created_at: Date;
+  duration_seconds: number;
+  participant_count: number;
+};
+
+type GroupMinuteDetail = {
+  id: string;
+  room_id: string;
+  group_id: string;
+  created_by: string | null;
+  title: string;
+  raw_transcript: string;
+  summary_markdown: string;
+  duration_seconds: number;
+  participant_count: number;
+  created_at: Date;
 };
 
 type AddGroupMemberBody = {
@@ -192,7 +220,8 @@ router.get('/:groupId', authMiddleware, async (req: Request, res: Response) => {
         g."avatar_url",
         g."created_by",
         g."created_at",
-        g."is_active"
+        g."is_active",
+        g."summarizer_enabled"
       FROM "groups" g
       WHERE g."id"::text = ${groupId}
       LIMIT 1
@@ -230,6 +259,169 @@ router.get('/:groupId', authMiddleware, async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error fetching group details:', error);
     return res.status(500).json({ error: 'Failed to fetch group details' });
+  }
+});
+
+// PATCH /groups/:groupId — Update group settings (owner/admin only)
+router.patch('/:groupId', authMiddleware, async (req: Request<{ groupId: string }, {}, UpdateGroupBody>, res: Response) => {
+  try {
+    const { groupId } = req.params;
+    const requesterId = req.user!.userId;
+    const hasName = Object.prototype.hasOwnProperty.call(req.body, 'name');
+    const hasDescription = Object.prototype.hasOwnProperty.call(req.body, 'description');
+    const hasSummarizerEnabled = Object.prototype.hasOwnProperty.call(req.body, 'summarizer_enabled');
+    const { name, description, summarizer_enabled: summarizerEnabled } = req.body;
+
+    if (!hasName && !hasDescription && !hasSummarizerEnabled) {
+      return res.status(400).json({ error: 'At least one field must be provided' });
+    }
+
+    if (hasName && (typeof name !== 'string' || !name.trim())) {
+      return res.status(400).json({ error: 'name must be a non-empty string' });
+    }
+
+    if (hasDescription && description !== null && typeof description !== 'string') {
+      return res.status(400).json({ error: 'description must be a string or null' });
+    }
+
+    if (hasSummarizerEnabled && typeof summarizerEnabled !== 'boolean') {
+      return res.status(400).json({ error: 'summarizer_enabled must be a boolean' });
+    }
+
+    const requesterRoleRows = await db.$queryRaw<Array<{ role: 'owner' | 'admin' }>>`
+      SELECT gm."role"
+      FROM "group_members" gm
+      WHERE gm."group_id"::text = ${groupId}
+        AND gm."user_id"::text = ${requesterId}
+        AND gm."role" IN ('owner', 'admin')
+      LIMIT 1
+    `;
+
+    if (!requesterRoleRows[0]) {
+      return res.status(403).json({ error: 'Forbidden: only owner or admin can update group settings' });
+    }
+
+    const updatedRows = await db.$queryRaw<GroupDetails[]>`
+      UPDATE "groups"
+      SET
+        "name" = CASE WHEN ${hasName} THEN ${name?.trim() ?? ''} ELSE "name" END,
+        "description" = CASE WHEN ${hasDescription} THEN ${description ?? null} ELSE "description" END,
+        "summarizer_enabled" = CASE WHEN ${hasSummarizerEnabled} THEN ${summarizerEnabled ?? false} ELSE "summarizer_enabled" END
+      WHERE "id"::text = ${groupId}
+      RETURNING
+        "id",
+        "name",
+        "description",
+        "avatar_url",
+        "created_by",
+        "created_at",
+        "is_active",
+        "summarizer_enabled"
+    `;
+
+    const updatedGroup = updatedRows[0];
+    if (!updatedGroup) {
+      return res.status(404).json({ error: 'Group not found' });
+    }
+
+    return res.json(updatedGroup);
+  } catch (error: any) {
+    console.error('Error updating group settings:', error);
+    if (error?.code === '22P02') {
+      return res.status(400).json({ error: 'Invalid group id' });
+    }
+    return res.status(500).json({ error: 'Failed to update group settings' });
+  }
+});
+
+// GET /groups/:groupId/minutes — Fetch lightweight minutes list for group members
+router.get('/:groupId/minutes', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { groupId } = req.params as { groupId: string };
+    const userId = req.user!.userId;
+
+    const memberships = await db.$queryRaw<Array<{ id: string }>>`
+      SELECT gm."id"
+      FROM "group_members" gm
+      WHERE gm."group_id"::text = ${groupId}
+        AND gm."user_id"::text = ${userId}
+      LIMIT 1
+    `;
+
+    if (!memberships[0]) {
+      return res.status(403).json({ error: 'Forbidden: you are not a member of this group' });
+    }
+
+    const minutes = await db.$queryRaw<GroupMinuteListItem[]>`
+      SELECT
+        mm."id",
+        mm."title",
+        mm."created_at",
+        mm."duration_seconds",
+        mm."participant_count"
+      FROM "meeting_minutes" mm
+      WHERE mm."group_id"::text = ${groupId}
+      ORDER BY mm."created_at" DESC
+    `;
+
+    return res.json(minutes);
+  } catch (error: any) {
+    console.error('Error fetching group minutes:', error);
+    if (error?.code === '22P02') {
+      return res.status(400).json({ error: 'Invalid group id' });
+    }
+    return res.status(500).json({ error: 'Failed to fetch group minutes' });
+  }
+});
+
+// GET /groups/:groupId/minutes/:minutesId — Fetch full minutes details for group members
+router.get('/:groupId/minutes/:minutesId', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { groupId, minutesId } = req.params as { groupId: string; minutesId: string };
+    const userId = req.user!.userId;
+
+    const memberships = await db.$queryRaw<Array<{ id: string }>>`
+      SELECT gm."id"
+      FROM "group_members" gm
+      WHERE gm."group_id"::text = ${groupId}
+        AND gm."user_id"::text = ${userId}
+      LIMIT 1
+    `;
+
+    if (!memberships[0]) {
+      return res.status(403).json({ error: 'Forbidden: you are not a member of this group' });
+    }
+
+    const minutesRows = await db.$queryRaw<GroupMinuteDetail[]>`
+      SELECT
+        mm."id",
+        mm."room_id",
+        mm."group_id",
+        mm."created_by",
+        mm."title",
+        mm."raw_transcript",
+        mm."summary_markdown",
+        mm."duration_seconds",
+        mm."participant_count",
+        mm."created_at"
+      FROM "meeting_minutes" mm
+      WHERE mm."group_id"::text = ${groupId}
+        AND mm."id"::text = ${minutesId}
+      LIMIT 1
+    `;
+
+    const minutes = minutesRows[0];
+    if (!minutes) {
+      return res.status(404).json({ error: 'Minutes not found' });
+    }
+
+    return res.json(minutes);
+  } catch (error: any) {
+    console.error('Error fetching group minutes detail:', error);
+    if (error?.code === '22P02') {
+      return res.status(400).json({ error: 'Invalid group or minutes id' });
+    }
+    return res.status(500).json({ error: 'Failed to fetch group minutes detail' });
   }
 });
 
