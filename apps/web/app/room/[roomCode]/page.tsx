@@ -41,18 +41,25 @@ export default function RoomPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-screen app-root">
-        <p className="text-lg" style={{ color: 'var(--foreground)' }}>Loading room...</p>
+      <div className="flex h-screen flex-col items-center justify-center gap-4 app-root">
+        <span className="brand-mark animate-pop-in text-lg" style={{ width: '3rem', height: '3rem' }}>M</span>
+        <div className="flex items-center gap-2 text-sm muted">
+          <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--primary)] [animation-delay:-0.3s]" />
+          <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--primary)] [animation-delay:-0.15s]" />
+          <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--primary)]" />
+          <span className="ml-1">Preparing your room…</span>
+        </div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-screen app-root">
-        <div className="text-center card p-6">
-          <p className="text-lg mb-4" style={{ color: 'var(--danger)' }}>{error}</p>
-          <button onClick={() => router.push('/dashboard')} className="btn btn-primary">Back to Dashboard</button>
+      <div className="flex h-screen items-center justify-center px-4 app-root">
+        <div className="card card-hero animate-pop-in max-w-sm p-8 text-center">
+          <p className="mb-1 font-display text-xl font-semibold">Something went wrong</p>
+          <p className="mb-6 text-sm text-rose-300">{error}</p>
+          <button onClick={() => router.push('/dashboard')} className="btn btn-primary mx-auto">Back to dashboard</button>
         </div>
       </div>
     );

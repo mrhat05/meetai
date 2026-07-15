@@ -35,33 +35,42 @@ export default function VideoTile({ stream, label, muted = false, avatarUrl, vid
 
   return (
     <div className="flex w-full flex-col items-center gap-2">
-      <div className="tile shadow-lg relative w-full overflow-hidden rounded-2xl" style={{ aspectRatio: '16 / 9', maxWidth: 640 }}>
+      <div
+        className="group tile relative w-full overflow-hidden rounded-2xl border border-[var(--border-strong)] shadow-[var(--shadow)]"
+        style={{ aspectRatio: '16 / 9', maxWidth: 640 }}
+      >
         <video
           ref={videoRef}
           autoPlay
           playsInline
           muted={muted}
-          className={`h-full w-full bg-black object-cover transition-opacity ${shouldShowFallback ? 'opacity-0' : 'opacity-100'}`}
+          className={`h-full w-full bg-black object-cover transition-opacity duration-300 ${shouldShowFallback ? 'opacity-0' : 'opacity-100'}`}
         />
 
         {shouldShowFallback && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[radial-gradient(circle_at_top,rgba(108,92,231,0.16),transparent_50%),linear-gradient(180deg,rgba(15,23,36,0.92),rgba(10,15,24,0.96))] text-center">
-            <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full border" style={{ borderColor: 'rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.04)' }}>
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[radial-gradient(circle_at_top,rgba(124,108,246,0.2),transparent_55%),linear-gradient(180deg,rgba(13,19,34,0.94),rgba(6,9,18,0.98))] text-center">
+            <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full border font-display" style={{ borderColor: 'rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)' }}>
               {avatarUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={avatarUrl} alt={`${label} avatar`} className="h-full w-full object-cover" />
               ) : (
-                <span className="text-2xl font-semibold">{getInitials(label)}</span>
+                <span className="gradient-text text-2xl font-semibold">{getInitials(label)}</span>
               )}
             </div>
-            <div>
-              <p className="text-sm font-semibold">{label}</p>
-              <p className="mt-1 text-xs" style={{ color: 'var(--muted)' }}>Camera off</p>
-            </div>
+            <p className="text-xs text-faint">Camera off</p>
           </div>
         )}
+
+        {/* Name overlay */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-gradient-to-t from-black/70 to-transparent px-3 pb-2.5 pt-6">
+          <span className="truncate text-sm font-medium text-white drop-shadow">{label}</span>
+          {muted && (
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-black/50 text-white/90" aria-label="You">
+              <span className="text-[0.65rem] font-semibold">You</span>
+            </span>
+          )}
+        </div>
       </div>
-      <p className="text-sm muted">{label}</p>
     </div>
   );
 }

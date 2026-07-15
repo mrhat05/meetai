@@ -5,6 +5,7 @@ import db from '../../db.js';
 import { authMiddleware } from '../../middleware/authMiddleware.js';
 import { sendMeetingStartedEmail } from '../../lib/mailer.js';
 import { emitToUser } from '../socket/presence.ts';
+import { answerMinutesQuestion, type QaHistoryTurn } from '../services/minutesQaService.ts';
 
 const router = Router();
 
@@ -52,6 +53,9 @@ type GroupDetails = {
   created_at: Date;
   is_active: boolean;
   summarizer_enabled: boolean;
+  // Present on GET /:groupId (derived from the active room); omitted by PATCH.
+  active_room_code?: string | null;
+  is_meeting_active?: boolean;
 };
 
 type GroupMemberItem = {
@@ -71,6 +75,14 @@ type GroupMinuteListItem = {
   participant_count: number;
 };
 
+type ActionItem = {
+  id: string;
+  task: string;
+  assignee: string | null;
+  due: string | null;
+  done: boolean;
+};
+
 type GroupMinuteDetail = {
   id: string;
   room_id: string;
@@ -81,6 +93,7 @@ type GroupMinuteDetail = {
   summary_markdown: string;
   duration_seconds: number;
   participant_count: number;
+  action_items: ActionItem[];
   created_at: Date;
 };
 
@@ -221,8 +234,18 @@ router.get('/:groupId', authMiddleware, async (req: Request, res: Response) => {
         g."created_by",
         g."created_at",
         g."is_active",
-        g."summarizer_enabled"
+        g."summarizer_enabled",
+        active_room."room_code" AS "active_room_code",
+        active_room."room_code" IS NOT NULL AS "is_meeting_active"
       FROM "groups" g
+      LEFT JOIN LATERAL (
+        SELECT r."room_code"
+        FROM "rooms" r
+        WHERE r."group_id" = g."id"
+          AND r."is_active" = true
+        ORDER BY r."created_at" DESC
+        LIMIT 1
+      ) active_room ON true
       WHERE g."id"::text = ${groupId}
       LIMIT 1
     `;
@@ -403,6 +426,7 @@ router.get('/:groupId/minutes/:minutesId', authMiddleware, async (req: Request, 
         mm."summary_markdown",
         mm."duration_seconds",
         mm."participant_count",
+        mm."action_items",
         mm."created_at"
       FROM "meeting_minutes" mm
       WHERE mm."group_id"::text = ${groupId}
@@ -422,6 +446,137 @@ router.get('/:groupId/minutes/:minutesId', authMiddleware, async (req: Request, 
       return res.status(400).json({ error: 'Invalid group or minutes id' });
     }
     return res.status(500).json({ error: 'Failed to fetch group minutes detail' });
+  }
+});
+
+// POST /groups/:groupId/minutes/:minutesId/ask — Ask-AI grounded in one meeting's minutes
+router.post('/:groupId/minutes/:minutesId/ask', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { groupId, minutesId } = req.params as { groupId: string; minutesId: string };
+    const userId = req.user!.userId;
+    const body = req.body as { question?: unknown; history?: unknown };
+
+    const question = typeof body.question === 'string' ? body.question.trim() : '';
+    if (!question || question.length > 2000) {
+      return res.status(400).json({ error: 'question is required (max 2000 characters)' });
+    }
+
+    const history: QaHistoryTurn[] = Array.isArray(body.history)
+      ? (body.history as Array<{ role?: unknown; content?: unknown }>)
+          .filter(
+            (turn) =>
+              (turn?.role === 'user' || turn?.role === 'assistant') &&
+              typeof turn?.content === 'string' &&
+              turn.content.trim().length > 0,
+          )
+          .slice(-8)
+          .map((turn) => ({ role: turn.role as 'user' | 'assistant', content: (turn.content as string).slice(0, 2000) }))
+      : [];
+
+    const memberships = await db.$queryRaw<Array<{ id: string }>>`
+      SELECT gm."id"
+      FROM "group_members" gm
+      WHERE gm."group_id"::text = ${groupId}
+        AND gm."user_id"::text = ${userId}
+      LIMIT 1
+    `;
+
+    if (!memberships[0]) {
+      return res.status(403).json({ error: 'Forbidden: you are not a member of this group' });
+    }
+
+    const minutesRows = await db.$queryRaw<Array<{ title: string; raw_transcript: string; summary_markdown: string }>>`
+      SELECT mm."title", mm."raw_transcript", mm."summary_markdown"
+      FROM "meeting_minutes" mm
+      WHERE mm."group_id"::text = ${groupId}
+        AND mm."id"::text = ${minutesId}
+      LIMIT 1
+    `;
+
+    const minutes = minutesRows[0];
+    if (!minutes) {
+      return res.status(404).json({ error: 'Minutes not found' });
+    }
+
+    try {
+      const answer = await answerMinutesQuestion({
+        title: minutes.title,
+        transcript: minutes.raw_transcript,
+        summaryMarkdown: minutes.summary_markdown,
+        question,
+        history,
+      });
+
+      return res.json({ answer });
+    } catch (aiError) {
+      console.error('Ask-AI failed:', aiError);
+      return res.status(502).json({ error: 'AI is unavailable right now' });
+    }
+  } catch (error: any) {
+    console.error('Error answering minutes question:', error);
+    if (error?.code === '22P02') {
+      return res.status(400).json({ error: 'Invalid group or minutes id' });
+    }
+    return res.status(500).json({ error: 'Failed to answer question' });
+  }
+});
+
+// PATCH /groups/:groupId/minutes/:minutesId/action-items/:itemId — toggle an action item's done state
+router.patch('/:groupId/minutes/:minutesId/action-items/:itemId', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { groupId, minutesId, itemId } = req.params as { groupId: string; minutesId: string; itemId: string };
+    const userId = req.user!.userId;
+    const done = (req.body as { done?: unknown }).done;
+
+    if (typeof done !== 'boolean') {
+      return res.status(400).json({ error: 'done (boolean) is required' });
+    }
+
+    const memberships = await db.$queryRaw<Array<{ id: string }>>`
+      SELECT gm."id"
+      FROM "group_members" gm
+      WHERE gm."group_id"::text = ${groupId}
+        AND gm."user_id"::text = ${userId}
+      LIMIT 1
+    `;
+
+    if (!memberships[0]) {
+      return res.status(403).json({ error: 'Forbidden: you are not a member of this group' });
+    }
+
+    const rows = await db.$queryRaw<Array<{ action_items: ActionItem[] }>>`
+      SELECT mm."action_items"
+      FROM "meeting_minutes" mm
+      WHERE mm."group_id"::text = ${groupId}
+        AND mm."id"::text = ${minutesId}
+      LIMIT 1
+    `;
+
+    const current = rows[0];
+    if (!current) {
+      return res.status(404).json({ error: 'Minutes not found' });
+    }
+
+    const items = Array.isArray(current.action_items) ? current.action_items : [];
+    if (!items.some((item) => item.id === itemId)) {
+      return res.status(404).json({ error: 'Action item not found' });
+    }
+
+    const updatedItems = items.map((item) => (item.id === itemId ? { ...item, done } : item));
+
+    await db.$executeRaw`
+      UPDATE "meeting_minutes"
+      SET "action_items" = ${JSON.stringify(updatedItems)}::jsonb
+      WHERE "id"::text = ${minutesId}
+    `;
+
+    return res.json({ actionItems: updatedItems });
+  } catch (error: any) {
+    console.error('Error updating action item:', error);
+    if (error?.code === '22P02') {
+      return res.status(400).json({ error: 'Invalid group or minutes id' });
+    }
+    return res.status(500).json({ error: 'Failed to update action item' });
   }
 });
 

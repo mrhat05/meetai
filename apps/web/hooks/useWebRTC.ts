@@ -19,6 +19,7 @@ type ServerToClientEvents = {
   'ice-candidate': (payload: { from: string; candidate: RTCIceCandidateInit }) => void;
   'peer-left': (peerId: string) => void;
   'chat-message': (payload: RoomChatMessage) => void;
+  'meeting-ended': (payload: { roomCode: string }) => void;
 };
 
 type ClientToServerEvents = {
@@ -85,6 +86,7 @@ export default function useWebRTC(roomCode: string, localStream: MediaStream | n
   const [peerPresence, setPeerPresence] = useState<Map<string, PeerPresence>>(() => new Map());
   const [connectedPeerIds, setConnectedPeerIds] = useState<string[]>([]);
   const [messages, setMessages] = useState<RoomChatMessage[]>([]);
+  const [meetingEnded, setMeetingEnded] = useState(false);
   const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
   const peerConnectionsRef = useRef<PeerConnections>(new Map());
   const localStreamRef = useRef<MediaStream | null>(localStream);
@@ -268,6 +270,10 @@ export default function useWebRTC(roomCode: string, localStream: MediaStream | n
       setMessages((currentMessages) => [...currentMessages, payload]);
     };
 
+    const handleMeetingEnded = () => {
+      setMeetingEnded(true);
+    };
+
     const handleConnect = () => {
       socket.emit('join-room', {
         roomCode,
@@ -290,6 +296,7 @@ export default function useWebRTC(roomCode: string, localStream: MediaStream | n
     socket.on('ice-candidate', handleIceCandidate);
     socket.on('peer-left', handlePeerLeft);
     socket.on('chat-message', handleChatMessage);
+    socket.on('meeting-ended', handleMeetingEnded);
     socket.on('connect_error', handleConnectError);
 
     if (socket.connected) {
@@ -311,6 +318,7 @@ export default function useWebRTC(roomCode: string, localStream: MediaStream | n
       socket.off('ice-candidate', handleIceCandidate);
       socket.off('peer-left', handlePeerLeft);
       socket.off('chat-message', handleChatMessage);
+      socket.off('meeting-ended', handleMeetingEnded);
       socket.off('connect_error', handleConnectError);
 
       peerConnectionsRef.current.forEach((connection) => connection.close());
@@ -361,5 +369,5 @@ export default function useWebRTC(roomCode: string, localStream: MediaStream | n
     ]);
   };
 
-  return { peers, peerPresence, connectedPeerIds, socketRef, messages, sendMessage };
+  return { peers, peerPresence, connectedPeerIds, socketRef, messages, sendMessage, meetingEnded };
 }

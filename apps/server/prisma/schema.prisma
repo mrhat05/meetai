@@ -139,6 +139,7 @@ model MeetingMinute {
   summaryMarkdown  String   @map("summary_markdown")
   durationSeconds  Int      @map("duration_seconds")
   participantCount Int      @map("participant_count")
+  actionItems      Json     @default("[]") @map("action_items")
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   room           Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)

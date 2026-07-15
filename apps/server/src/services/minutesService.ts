@@ -1,4 +1,5 @@
 import db from '../../db.js';
+import type { ActionItem } from './actionItemsService.js';
 
 type SaveMinutesInput = {
   roomId: string;
@@ -9,9 +10,21 @@ type SaveMinutesInput = {
   summaryMarkdown: string;
   durationSeconds: number;
   participantCount: number;
+  aiTitle?: string | null;
+  actionItems?: ActionItem[];
 };
 
-function buildMinutesTitle(groupName: string): string {
+function buildMinutesTitle(groupName: string, aiTitle?: string | null): string {
+  if (aiTitle && aiTitle.trim()) {
+    const shortDate = new Date().toLocaleDateString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+
+    return `${aiTitle.trim()} · ${shortDate}`.slice(0, 200);
+  }
+
   const formattedDate = new Date().toLocaleDateString('en-IN', {
     day: 'numeric',
     month: 'short',
@@ -32,8 +45,11 @@ export async function saveMinutes({
   summaryMarkdown,
   durationSeconds,
   participantCount,
+  aiTitle,
+  actionItems,
 }: SaveMinutesInput): Promise<string> {
-  const title = buildMinutesTitle(groupName);
+  const title = buildMinutesTitle(groupName, aiTitle);
+  const actionItemsJson = JSON.stringify(actionItems ?? []);
 
   const insertedMinutes = await db.$queryRaw<Array<{ id: string }>>`
     INSERT INTO "meeting_minutes" (
@@ -44,7 +60,8 @@ export async function saveMinutes({
       "raw_transcript",
       "summary_markdown",
       "duration_seconds",
-      "participant_count"
+      "participant_count",
+      "action_items"
     )
     VALUES (
       ${roomId}::uuid,
@@ -54,7 +71,8 @@ export async function saveMinutes({
       ${transcript},
       ${summaryMarkdown},
       ${durationSeconds},
-      ${participantCount}
+      ${participantCount},
+      ${actionItemsJson}::jsonb
     )
     RETURNING "id"
   `;

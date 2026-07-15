@@ -54,8 +54,12 @@ io.on('connection', signalingHandler(io));
 
 const PORT = Number(process.env.PORT) || 3000;
 
-server.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-});
+// Under the automated test suite the app is started on an ephemeral port by
+// the test itself, so skip the default listen to avoid binding PORT.
+if (process.env.NODE_ENV !== 'test') {
+  server.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+  });
+}
 
 export { app, io };

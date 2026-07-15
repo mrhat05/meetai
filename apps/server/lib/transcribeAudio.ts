@@ -5,6 +5,19 @@ import Groq from 'groq-sdk';
 const groqApiKey = process.env.GROQ_API_KEY?.trim();
 const groq = groqApiKey ? new Groq({ apiKey: groqApiKey }) : null;
 
+export type TranscriptSegment = {
+  start: number;
+  text: string;
+};
+
+// Deterministic segments used by the automated test suite so it never hits
+// the real Groq API. Enabled with AI_STUB=1.
+const STUB_SEGMENTS: TranscriptSegment[] = [
+  { start: 0, text: 'Welcome everyone to the weekly sync.' },
+  { start: 5, text: 'We agreed to ship the release on Friday.' },
+  { start: 11, text: 'Alex will send the report by Wednesday.' },
+];
+
 function formatSecondsToMMSS(secondsValue: unknown): string {
   const totalSeconds = Math.max(0, Math.floor(Number(secondsValue) || 0));
   const minutes = Math.floor(totalSeconds / 60)
@@ -14,7 +27,20 @@ function formatSecondsToMMSS(secondsValue: unknown): string {
   return `${minutes}:${seconds}`;
 }
 
-export async function transcribeAudio(audioFilePath: string): Promise<string> {
+/**
+ * Transcribes one audio file and returns raw timestamped segments.
+ * Errors resolve to an empty array; the temp file is always deleted.
+ */
+export async function transcribeAudioSegments(audioFilePath: string): Promise<TranscriptSegment[]> {
+  if (process.env.AI_STUB === '1') {
+    try {
+      await unlink(audioFilePath);
+    } catch {
+      // ignore — the temp file may already be gone
+    }
+    return STUB_SEGMENTS;
+  }
+
   try {
     if (!groq) {
       throw new Error('GROQ_API_KEY is not configured');
@@ -31,23 +57,35 @@ export async function transcribeAudio(audioFilePath: string): Promise<string> {
     };
 
     const segments = Array.isArray(response?.segments) ? response.segments : [];
-    const lines = segments
-      .map((segment) => {
-        const timestamp = formatSecondsToMMSS(segment.start);
-        const text = (segment.text ?? '').trim();
-        return text ? `[${timestamp}] ${text}` : '';
-      })
-      .filter(Boolean);
-
-    return lines.join('\n');
+    return segments
+      .map((segment) => ({
+        start: Math.max(0, Number(segment.start) || 0),
+        text: (segment.text ?? '').trim(),
+      }))
+      .filter((segment) => segment.text.length > 0);
   } catch (error) {
-    console.error('transcribeAudio failed:', error);
-    return '';
+    console.error('transcribeAudioSegments failed:', error);
+    return [];
   } finally {
     try {
       await unlink(audioFilePath);
     } catch (cleanupError) {
-      console.error('transcribeAudio cleanup failed:', cleanupError);
+      console.error('transcribeAudioSegments cleanup failed:', cleanupError);
     }
   }
+}
+
+export function formatSegments(segments: TranscriptSegment[]): string {
+  return segments
+    .map((segment) => (segment.text ? `[${formatSecondsToMMSS(segment.start)}] ${segment.text}` : ''))
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * Back-compat helper: transcribes one file and returns "[MM:SS] text" lines.
+ */
+export async function transcribeAudio(audioFilePath: string): Promise<string> {
+  const segments = await transcribeAudioSegments(audioFilePath);
+  return formatSegments(segments);
 }

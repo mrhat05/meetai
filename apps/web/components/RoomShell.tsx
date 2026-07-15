@@ -2,10 +2,24 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import {
+  LuMic,
+  LuMicOff,
+  LuVideo,
+  LuVideoOff,
+  LuPhoneOff,
+  LuMessageSquare,
+  LuChevronLeft,
+  LuChevronRight,
+  LuUsers,
+  LuSend,
+  LuSparkles,
+  LuLogOut,
+} from 'react-icons/lu';
 import api from '@/lib/api';
 import useLocalStream from '@/hooks/useLocalStream';
 import useWebRTC from '@/hooks/useWebRTC';
-import useAudioRecorder from '@/hooks/useAudioRecorder';
+import useMeetingRecorder from '@/hooks/useMeetingRecorder';
 import VideoTile from '@/components/VideoTile';
 
 type RoomShellProps = {
@@ -37,8 +51,8 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
 export default function RoomShell({ roomCode }: RoomShellProps) {
   const router = useRouter();
   const { stream: localStream, isVideoOn, isAudioOn, mediaError, toggleVideo, toggleAudio } = useLocalStream();
-  const { peers, peerPresence, connectedPeerIds, messages, sendMessage } = useWebRTC(roomCode, localStream, isVideoOn);
-  const { startRecording, stopRecording } = useAudioRecorder();
+  const { peers, peerPresence, connectedPeerIds, messages, sendMessage, meetingEnded } = useWebRTC(roomCode, localStream, isVideoOn);
+  const { startSession, addRemoteTrack, removeRemoteTrack, stopSession, isRecording } = useMeetingRecorder();
   const [isHost, setIsHost] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isEndingCall, setIsEndingCall] = useState(false);
@@ -52,6 +66,9 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
   const summaryUploadPromiseRef = useRef<Promise<boolean> | null>(null);
   const summaryUploadedRef = useRef(false);
   const recordingStartedRef = useRef(false);
+  // True only when *this* host explicitly chose "End call" (end for everyone),
+  // so that a plain "Leave" (or an unexpected unmount) never ends the meeting.
+  const endedByMeRef = useRef(false);
 
   const peerEntries = useMemo(() => Array.from(peers.entries()), [peers]);
   const peersWithoutMedia = useMemo(() => connectedPeerIds.filter((peerId) => !peers.has(peerId)), [connectedPeerIds, peers]);
@@ -110,17 +127,41 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
   }, [toastMessage]);
 
   useEffect(() => {
-    if (!summarizerEnabled || recordingStartedRef.current) {
+    if (!summarizerEnabled || !isHost || recordingStartedRef.current) {
       return;
     }
 
     recordingStartedRef.current = true;
 
-    void startRecording().catch((error) => {
+    void startSession(userDisplayName).catch((error) => {
       recordingStartedRef.current = false;
       console.error('Failed to start audio recording', error);
     });
-  }, [startRecording, summarizerEnabled]);
+  }, [isHost, startSession, summarizerEnabled, userDisplayName]);
+
+  // Keep one audio recorder per remote speaker while the session is running.
+  const recordedPeerIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!isRecording) {
+      return;
+    }
+
+    const currentPeerIds = new Set(peers.keys());
+
+    for (const [peerId, stream] of peers) {
+      if (!recordedPeerIdsRef.current.has(peerId)) {
+        addRemoteTrack(peerId, stream, peerPresence.get(peerId)?.displayName || 'Guest');
+        recordedPeerIdsRef.current.add(peerId);
+      }
+    }
+
+    for (const peerId of Array.from(recordedPeerIdsRef.current)) {
+      if (!currentPeerIds.has(peerId)) {
+        removeRemoteTrack(peerId);
+        recordedPeerIdsRef.current.delete(peerId);
+      }
+    }
+  }, [addRemoteTrack, isRecording, peerPresence, peers, removeRemoteTrack]);
 
   useEffect(() => {
     const getUserInfoFromToken = () => {
@@ -218,16 +259,28 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
       if (!summaryUploadPromiseRef.current) {
         summaryUploadPromiseRef.current = (async () => {
           if (showToast) {
-            setToastMessage('Generating meeting summary...');
+            setToastMessage('Ending meeting — minutes will be generated shortly…');
           }
 
-          const audioBlob = await stopRecording();
-          if (!audioBlob) {
+          const tracks = await stopSession();
+          if (!tracks || tracks.length === 0) {
             return false;
           }
 
           const formData = new FormData();
-          formData.append('audio', audioBlob, 'meeting.webm');
+          tracks.forEach((track, index) => {
+            formData.append('audio', track.blob, `track-${index}.webm`);
+          });
+          formData.append(
+            'manifest',
+            JSON.stringify({
+              tracks: tracks.map((track, index) => ({
+                index,
+                speaker: track.speaker,
+                offsetMs: track.offsetMs,
+              })),
+            })
+          );
 
           await api.post(`/rooms/${roomCode}/end-with-summary`, formData);
           summaryUploadedRef.current = true;
@@ -242,26 +295,40 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
         summaryUploadPromiseRef.current = null;
       }
     },
-    [isHost, roomCode, stopRecording, summarizerEnabled]
+    [isHost, roomCode, stopSession, summarizerEnabled]
   );
 
   useEffect(() => {
     return () => {
-      if (summarizerEnabled && isHost) {
+      // Only finalize (and thereby end) the meeting when the host deliberately
+      // ended it. A plain "Leave" just stops the local recording and walks away
+      // (the recorder hook cleans up its own recorders on unmount).
+      if (endedByMeRef.current && summarizerEnabled && isHost) {
         void finalizeMeetingSummary({ showToast: false }).catch((error) => {
           console.error('Failed to finalize meeting summary on unmount', error);
         });
-        return;
       }
-
-      void stopRecording().catch((error) => {
-        console.error('Failed to stop audio recording on unmount', error);
-      });
     };
-  }, [finalizeMeetingSummary, isHost, stopRecording, summarizerEnabled]);
+  }, [finalizeMeetingSummary, isHost, summarizerEnabled]);
+
+  // When the host ends the meeting for everyone, the server broadcasts
+  // `meeting-ended`. Every other participant is dropped back to the dashboard.
+  useEffect(() => {
+    if (!meetingEnded || endedByMeRef.current) {
+      return undefined;
+    }
+
+    setToastMessage('This meeting was ended by the host');
+    const timeoutId = window.setTimeout(() => {
+      router.push('/dashboard');
+    }, 1300);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [meetingEnded, router]);
 
   const handleEndCall = async () => {
     setIsEndingCall(true);
+    endedByMeRef.current = true;
 
     try {
       if (summarizerEnabled && isHost) {
@@ -277,6 +344,7 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
       router.push('/dashboard');
     } catch (error) {
       console.error('Failed to end call', error);
+      endedByMeRef.current = false;
       setIsEndingCall(false);
     }
   };
@@ -301,17 +369,33 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
         </div>
       )}
 
-      <header className="border-b px-6 py-4" style={{ borderColor: 'var(--border)', background: 'linear-gradient(180deg, rgba(255,255,255,0.02), transparent)' }}>
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 rounded-2xl border px-5 py-4" style={{ borderColor: 'var(--border)', background: 'rgba(255,255,255,0.012)' }}>
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">Room {roomCode}</h1>
-            {groupName && (
-              <p className="mt-1 inline-flex items-center gap-2 text-xs font-medium text-white/60">
-                <span aria-hidden="true" className="text-white/50">◦</span>
-                <span>{groupName}</span>
-              </p>
+      <header className="px-4 pt-4 sm:px-6">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 rounded-2xl border px-5 py-3.5" style={{ borderColor: 'var(--border)', background: 'rgba(255,255,255,0.02)' }}>
+          <div className="flex items-center gap-3">
+            <span className="brand-mark text-base" style={{ width: '2.2rem', height: '2.2rem' }}>M</span>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="font-display text-lg font-semibold tracking-tight">Room</h1>
+                <span className="chip font-mono text-xs uppercase tracking-wide">{roomCode}</span>
+              </div>
+              {groupName && (
+                <p className="mt-0.5 inline-flex items-center gap-1.5 text-xs font-medium text-white/55">
+                  <LuUsers aria-hidden="true" className="text-[0.8rem]" /> {groupName}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {summarizerEnabled && (
+              <span className="chip text-xs" style={{ color: 'var(--accent)' }}>
+                <LuSparkles aria-hidden="true" /> AI minutes on
+              </span>
             )}
-            <p className="text-sm muted">Connected peers: {connectedPeerIds.length}</p>
+            <span className="badge">
+              <span className="dot-live" />
+              {connectedPeerIds.length + 1} in call
+            </span>
           </div>
         </div>
       </header>
@@ -333,7 +417,7 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
                 className="btn flex h-14 w-14 self-center items-center justify-center rounded-full text-lg font-semibold disabled:opacity-40"
                 aria-label="Previous tiles"
               >
-                ←
+                <LuChevronLeft aria-hidden="true" />
               </button>
 
               <div className={`grid flex-1 gap-5 self-stretch ${visibleTiles.length === 1 ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2'}`}>
@@ -367,7 +451,7 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
                 className="btn flex h-14 w-14 self-center items-center justify-center rounded-full text-lg font-semibold disabled:opacity-40"
                 aria-label="Next tiles"
               >
-                →
+                <LuChevronRight aria-hidden="true" />
               </button>
             </div>
           ) : (
@@ -408,21 +492,27 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
         {isChatOpen && (
           <aside className="w-full self-start rounded-3xl card p-4 shadow-2xl shadow-black/30 lg:sticky lg:top-6 lg:max-h-[calc(100vh-10rem)] lg:flex-none">
             <div className="flex h-full flex-col">
-              <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: 'var(--border)' }}>
+              <div className="flex items-center gap-2.5 border-b pb-3" style={{ borderColor: 'var(--border)' }}>
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--border)] bg-white/5 text-[var(--accent)]">
+                  <LuMessageSquare aria-hidden="true" />
+                </span>
                 <div>
                   <h2 className="text-base font-semibold">Chat</h2>
-                  <p className="text-sm muted">In-call messages</p>
+                  <p className="text-xs muted">In-call messages</p>
                 </div>
               </div>
 
-              <div className="flex-1 space-y-3 overflow-auto py-4 text-sm">
+              <div className="flex-1 space-y-2.5 overflow-auto py-4 text-sm">
                 {messages.length === 0 ? (
-                  <p className="muted">No messages yet.</p>
+                  <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+                    <LuMessageSquare aria-hidden="true" className="text-2xl text-faint" />
+                    <p className="muted">No messages yet.</p>
+                  </div>
                 ) : (
                   messages.map((message, index) => (
-                    <div key={`${message.senderId}-${message.timestamp}-${index}`} className="rounded-xl tile px-3 py-2">
-                      <p className="text-xs muted">{message.senderName}</p>
-                      <p className="text-sm">{message.text}</p>
+                    <div key={`${message.senderId}-${message.timestamp}-${index}`} className="rounded-xl tile px-3 py-2.5">
+                      <p className="text-xs font-medium text-[var(--accent)]">{message.senderName}</p>
+                      <p className="mt-0.5 text-sm leading-6">{message.text}</p>
                     </div>
                   ))
                 )}
@@ -442,8 +532,8 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
                   placeholder="Type a message"
                   className="auth-input flex-1"
                 />
-                <button type="button" onClick={handleSendMessage} className="btn px-3 py-2">
-                  Send
+                <button type="button" onClick={handleSendMessage} className="btn flex h-11 w-11 shrink-0 items-center justify-center px-0" aria-label="Send message">
+                  <LuSend aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -451,37 +541,59 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
         )}
       </main>
 
-      <footer className="fixed bottom-0 left-0 right-0 z-40 border-t px-6 py-4 backdrop-blur" style={{ borderColor: 'var(--border)', background: 'rgba(15, 23, 36, 0.9)' }}>
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-center gap-4">
+      <footer className="fixed bottom-0 left-0 right-0 z-40 border-t px-4 py-4 backdrop-blur-xl sm:px-6" style={{ borderColor: 'var(--border)', background: 'rgba(9, 13, 24, 0.82)' }}>
+        <div className="mx-auto flex max-w-7xl items-center justify-center gap-2.5 sm:gap-3">
           <button
             type="button"
             onClick={toggleAudio}
-            className={`rounded-full px-5 py-3 text-sm font-medium transition ${isAudioOn ? 'btn' : 'btn-danger'}`}
+            aria-label={isAudioOn ? 'Mute microphone' : 'Unmute microphone'}
+            className={`flex h-13 w-13 items-center justify-center rounded-full text-lg sm:h-14 sm:w-14 ${isAudioOn ? 'btn' : 'btn-danger'}`}
           >
-            {isAudioOn ? '🎤 Mute' : '🔇 Unmute'}
+            {isAudioOn ? <LuMic aria-hidden="true" /> : <LuMicOff aria-hidden="true" />}
           </button>
 
           <button
             type="button"
             onClick={toggleVideo}
-            className={`rounded-full px-5 py-3 text-sm font-medium transition ${isVideoOn ? 'btn' : 'btn-danger'}`}
+            aria-label={isVideoOn ? 'Turn camera off' : 'Turn camera on'}
+            className={`flex h-13 w-13 items-center justify-center rounded-full text-lg sm:h-14 sm:w-14 ${isVideoOn ? 'btn' : 'btn-danger'}`}
           >
-            {isVideoOn ? '📹 Camera On' : '📹 Camera Off'}
+            {isVideoOn ? <LuVideo aria-hidden="true" /> : <LuVideoOff aria-hidden="true" />}
           </button>
 
-          {isHost ? (
-            <button type="button" onClick={handleEndCall} disabled={isEndingCall} className="rounded-full btn-danger px-5 py-3 text-sm font-medium">
-              {isEndingCall ? 'Ending call...' : 'End call'}
-            </button>
-          ) : (
-            <button type="button" onClick={handleLeaveCall} className="rounded-full btn px-5 py-3 text-sm font-medium">
-              Leave call
+          <button
+            type="button"
+            onClick={() => setIsChatOpen((current) => !current)}
+            aria-label={isChatOpen ? 'Hide chat' : 'Show chat'}
+            className={`flex h-13 w-13 items-center justify-center rounded-full text-lg sm:h-14 sm:w-14 ${isChatOpen ? 'btn-primary' : 'btn'}`}
+          >
+            <LuMessageSquare aria-hidden="true" />
+          </button>
+
+          <div className="mx-1 hidden h-8 w-px bg-[var(--border-strong)] sm:block" />
+
+          <button
+            type="button"
+            onClick={handleLeaveCall}
+            disabled={isEndingCall}
+            className="btn h-13 gap-2 rounded-full px-5 sm:h-14 sm:px-6"
+          >
+            <LuLogOut aria-hidden="true" />
+            <span className="hidden sm:inline">Leave</span>
+          </button>
+
+          {isHost && (
+            <button
+              type="button"
+              onClick={handleEndCall}
+              disabled={isEndingCall}
+              className="btn btn-danger h-13 gap-2 rounded-full px-5 sm:h-14 sm:px-6"
+              title="End the meeting for everyone"
+            >
+              <LuPhoneOff aria-hidden="true" />
+              <span className="hidden sm:inline">{isEndingCall ? 'Ending…' : 'End call'}</span>
             </button>
           )}
-
-          <button type="button" onClick={() => setIsChatOpen((current) => !current)} className="rounded-full btn-ghost px-5 py-3 text-sm font-medium">
-            {isChatOpen ? 'Hide chat' : 'Chat'}
-          </button>
         </div>
       </footer>
     </div>

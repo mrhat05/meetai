@@ -9,7 +9,10 @@ import { authMiddleware } from '../../middleware/authMiddleware.js';
 import transcriptionService from '../services/transcriptionService.js';
 import summarizationService from '../services/summarizationService.js';
 import minutesService from '../services/minutesService.ts';
-import { emitToUser } from '../socket/presence.ts';
+import { mergeSpeakerSegments } from '../services/transcriptMerge.ts';
+import actionItemsService from '../services/actionItemsService.ts';
+import { emitToUser, emitToRoom } from '../socket/presence.ts';
+import { sendMinutesReadyEmail } from '../../lib/mailer.js';
 
 const router = Router();
 const AUDIO_UPLOAD_DIR =
@@ -189,13 +192,167 @@ router.get('/:roomCode', authMiddleware, async (req: Request, res: Response) => 
   }
 });
 
-// POST /rooms/:roomCode/end-with-summary — Host ends room and stores AI summary
-router.post('/:roomCode/end-with-summary', authMiddleware, upload.single('audio'), async (req: Request, res: Response) => {
+type UploadedTrack = {
+  filePath: string;
+  speaker: string;
+  offsetMs: number;
+};
+
+type ManifestTrackEntry = {
+  index?: number;
+  speaker?: string;
+  offsetMs?: number;
+};
+
+/**
+ * Pairs the uploaded audio files with the client manifest describing who each
+ * track belongs to. Backward compatible: a single file without a manifest is
+ * treated as one host-voiced track starting at offset 0.
+ */
+function resolveUploadedTracks(
+  files: Express.Multer.File[],
+  manifestRaw: unknown,
+  hostDisplayName: string,
+): UploadedTrack[] | null {
+  if (typeof manifestRaw !== 'string' || !manifestRaw.trim()) {
+    if (files.length === 1 && files[0]) {
+      return [{ filePath: files[0].path, speaker: hostDisplayName, offsetMs: 0 }];
+    }
+    return null;
+  }
+
+  let entries: ManifestTrackEntry[];
+  try {
+    const parsed = JSON.parse(manifestRaw) as { tracks?: ManifestTrackEntry[] };
+    entries = Array.isArray(parsed?.tracks) ? parsed.tracks : [];
+  } catch {
+    return null;
+  }
+
+  if (entries.length !== files.length) {
+    return null;
+  }
+
+  const tracks: UploadedTrack[] = [];
+  for (let i = 0; i < files.length; i += 1) {
+    const file = files[i];
+    const entry = entries.find((candidate) => candidate.index === i) ?? entries[i];
+    if (!file || !entry) {
+      return null;
+    }
+
+    const offsetMs = Number(entry.offsetMs);
+    if (!Number.isFinite(offsetMs) || offsetMs < 0) {
+      return null;
+    }
+
+    const speaker = String(entry.speaker ?? '').trim().slice(0, 80) || hostDisplayName;
+    tracks.push({ filePath: file.path, speaker, offsetMs });
+  }
+
+  return tracks;
+}
+
+/**
+ * The AI minutes pipeline, run in the background after the HTTP response.
+ * Always saves a minutes row — even on total transcription failure — so a
+ * meeting is never silently lost, then notifies members over socket + email.
+ */
+async function processMeetingMinutes(params: {
+  roomId: string;
+  roomCode: string;
+  groupId: string;
+  groupName: string;
+  hostUserId: string;
+  durationSeconds: number;
+  tracks: UploadedTrack[];
+}): Promise<void> {
+  const { roomId, groupId, groupName, hostUserId, durationSeconds, tracks } = params;
+
+  const speakerTracks = [] as Array<{ speaker: string; offsetMs: number; segments: Awaited<ReturnType<typeof transcriptionService.transcribeAudioSegments>> }>;
+  for (const track of tracks) {
+    const segments = await transcriptionService.transcribeAudioSegments(track.filePath);
+    if (segments.length > 0) {
+      speakerTracks.push({ speaker: track.speaker, offsetMs: track.offsetMs, segments });
+    }
+  }
+
+  const transcript = mergeSpeakerSegments(speakerTracks);
+  const hasSpeech = transcript.trim().length > 0;
+
+  const dbParticipantCount = await (db as any).participant.count({ where: { roomId } });
+  const manifestSpeakerCount = new Set(tracks.map((track) => track.speaker)).size;
+  const participantCount = Math.max(dbParticipantCount, manifestSpeakerCount);
+
+  const aiTitle = hasSpeech ? await summarizationService.generateMinutesTitle({ transcript, groupName }) : null;
+  const summaryMarkdown = hasSpeech
+    ? await summarizationService.summarizeMeeting({
+        transcript,
+        groupName,
+        durationSeconds,
+        participantCount,
+      })
+    : '## Summary\nNo speech was detected in this meeting, so no summary could be generated.';
+
+  const actionItems = hasSpeech
+    ? await actionItemsService.extractActionItems({ transcript, summaryMarkdown })
+    : [];
+
+  const minutesId = await minutesService.saveMinutes({
+    roomId,
+    groupId,
+    createdBy: hostUserId,
+    groupName,
+    transcript: hasSpeech ? transcript : 'No speech detected.',
+    summaryMarkdown,
+    durationSeconds,
+    participantCount,
+    aiTitle,
+    actionItems,
+  });
+
+  const groupMemberRows = await db.$queryRaw<Array<{ user_id: string; email: string; display_name: string }>>`
+    SELECT gm."user_id", u."email", u."display_name"
+    FROM "group_members" gm
+    INNER JOIN "users" u ON u."id" = gm."user_id"
+    WHERE gm."group_id" = ${groupId}::uuid
+  `;
+
+  const minutesTitleRows = await db.$queryRaw<Array<{ title: string }>>`
+    SELECT mm."title" FROM "meeting_minutes" mm WHERE mm."id" = ${minutesId}::uuid LIMIT 1
+  `;
+  const minutesTitle = minutesTitleRows[0]?.title ?? groupName;
+
+  for (const member of groupMemberRows) {
+    emitToUser(member.user_id, 'minutes-ready', {
+      groupId,
+      minutesId,
+    });
+
+    sendMinutesReadyEmail({
+      toEmail: member.email,
+      toName: member.display_name,
+      groupName,
+      title: minutesTitle,
+      summaryMarkdown,
+      groupId,
+      minutesId,
+    }).catch((emailError) => {
+      console.error('Failed to send minutes-ready email:', emailError);
+    });
+  }
+}
+
+// POST /rooms/:roomCode/end-with-summary — Host ends room; AI minutes are
+// generated in the background (one audio track per speaker + manifest).
+router.post('/:roomCode/end-with-summary', authMiddleware, upload.array('audio', 10), async (req: Request, res: Response) => {
   try {
     const { roomCode } = req.params as { roomCode: string };
-    const audioFile = (req as Request & { file?: Express.Multer.File | undefined }).file;
+    const audioFiles = ((req as Request & { files?: Express.Multer.File[] }).files ?? []).filter(
+      (file) => Boolean(file?.path),
+    );
 
-    if (!audioFile?.path) {
+    if (audioFiles.length === 0) {
       return res.status(400).json({ error: 'audio file is required' });
     }
 
@@ -222,6 +379,16 @@ router.post('/:roomCode/end-with-summary', authMiddleware, upload.single('audio'
       return res.status(400).json({ error: 'Meeting summaries require a group room' });
     }
 
+    const hostRows = await db.$queryRaw<Array<{ display_name: string }>>`
+      SELECT u."display_name" FROM "users" u WHERE u."id" = ${req.user!.userId}::uuid LIMIT 1
+    `;
+    const hostDisplayName = hostRows[0]?.display_name?.trim() || 'Host';
+
+    const tracks = resolveUploadedTracks(audioFiles, (req.body as { manifest?: unknown })?.manifest, hostDisplayName);
+    if (!tracks) {
+      return res.status(400).json({ error: 'invalid audio manifest' });
+    }
+
     const endedAt = new Date();
     await (db as any).room.update({
       where: { id: room.id },
@@ -231,44 +398,29 @@ router.post('/:roomCode/end-with-summary', authMiddleware, upload.single('audio'
       },
     });
 
+    // Tell every participant the meeting is over so they leave immediately.
+    emitToRoom(roomCode, 'meeting-ended', { roomCode });
+
     const durationSeconds = Math.max(1, Math.round((endedAt.getTime() - room.createdAt.getTime()) / 1000));
-    const participantCount = await (db as any).participant.count({ where: { roomId: room.id } });
-    const transcript = await transcriptionService.transcribeAudio(audioFile.path);
     const roomLabel = room.group.name || `Room ${room.roomCode}`;
-    const summaryMarkdown = await summarizationService.summarizeMeeting({
-      transcript,
-      groupName: roomLabel,
-      durationSeconds,
-      participantCount,
-    });
 
-    const minutesId = await minutesService.saveMinutes({
+    // Kick off transcription + summarization in the background; members are
+    // notified via the 'minutes-ready' socket event and email when done.
+    void processMeetingMinutes({
       roomId: room.id,
+      roomCode,
       groupId: room.groupId,
-      createdBy: req.user!.userId,
       groupName: roomLabel,
-      transcript,
-      summaryMarkdown,
+      hostUserId: req.user!.userId,
       durationSeconds,
-      participantCount,
+      tracks,
+    }).catch((pipelineError) => {
+      console.error('Meeting minutes pipeline failed:', pipelineError);
     });
 
-    const groupMemberRows = await db.$queryRaw<Array<{ user_id: string }>>`
-      SELECT gm."user_id"
-      FROM "group_members" gm
-      WHERE gm."group_id" = ${room.groupId}::uuid
-    `;
-
-    for (const member of groupMemberRows) {
-      emitToUser(member.user_id, 'minutes-ready', {
-        groupId: room.groupId,
-        minutesId,
-      });
-    }
-
-    return res.json({
+    return res.status(202).json({
       success: true,
-      minutesId,
+      processing: true,
     });
   } catch (error) {
     console.error('Error ending room with summary:', error);
@@ -352,7 +504,10 @@ router.post('/:roomCode/end', authMiddleware, async (req: Request, res: Response
       },
     });
 
-    return res.json(updatedRoom); 
+    // Notify everyone still in the room so they are dropped back to the dashboard.
+    emitToRoom(roomCode, 'meeting-ended', { roomCode });
+
+    return res.json(updatedRoom);
   } catch (error) {
     console.error('Error ending room:', error);
     return res.status(500).json({ error: 'Failed to end room' });

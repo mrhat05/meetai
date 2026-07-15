@@ -15,6 +15,16 @@ type SendMeetingStartedEmailArgs = {
   roomCode: string;
 };
 
+type SendMinutesReadyEmailArgs = {
+  toEmail: string;
+  toName: string;
+  groupName: string;
+  title: string;
+  summaryMarkdown: string;
+  groupId: string;
+  minutesId: string;
+};
+
 type SmtpConfig = {
   host: string;
   port: number;
@@ -82,6 +92,121 @@ function escapeHtml(value: string) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+/**
+ * Renders the minutes summary markdown into simple, safe inline-styled HTML.
+ * Handles the subset our summarizer emits: "## " headings, "- " bullets,
+ * "**bold**" (with **[ACTION]** highlighted), and plain paragraphs.
+ * The input is HTML-escaped before any tags are introduced.
+ */
+function renderSummaryHtml(markdown: string): string {
+  const bold = (line: string) =>
+    line
+      .replaceAll('**[ACTION]**', '<span style="background:#fef3c7;color:#92400e;font-weight:700;padding:1px 6px;border-radius:4px">ACTION</span>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+  const html: string[] = [];
+  let listOpen = false;
+
+  const closeList = () => {
+    if (listOpen) {
+      html.push('</ul>');
+      listOpen = false;
+    }
+  };
+
+  for (const rawLine of escapeHtml(markdown).split('\n')) {
+    const line = rawLine.trim();
+
+    if (!line) {
+      closeList();
+      continue;
+    }
+
+    if (line.startsWith('## ')) {
+      closeList();
+      html.push(`<h3 style="margin:18px 0 8px;font-size:15px;color:#0f172a">${bold(line.slice(3))}</h3>`);
+    } else if (line.startsWith('- ')) {
+      if (!listOpen) {
+        html.push('<ul style="margin:0 0 12px;padding-left:20px">');
+        listOpen = true;
+      }
+      html.push(`<li style="margin:0 0 6px">${bold(line.slice(2))}</li>`);
+    } else {
+      closeList();
+      html.push(`<p style="margin:0 0 12px">${bold(line)}</p>`);
+    }
+  }
+
+  closeList();
+  return html.join('\n');
+}
+
+export async function sendMinutesReadyEmail({
+  toEmail,
+  toName,
+  groupName,
+  title,
+  summaryMarkdown,
+  groupId,
+  minutesId,
+}: SendMinutesReadyEmailArgs) {
+  const transport = getTransport();
+  const sender = process.env.SMTP_FROM?.trim() || process.env.SMTP_USER?.trim();
+  const appUrl = process.env.APP_URL?.trim();
+
+  if (!appUrl) {
+    throw new Error('APP_URL is required to send minutes emails');
+  }
+
+  if (!transport || !sender) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`Minutes email not sent because SMTP is not configured. Preview recipient: ${toEmail}, minutes: ${minutesId}`);
+      return { preview: true };
+    }
+
+    throw new Error('SMTP configuration is required to send minutes emails');
+  }
+
+  const safeToEmail = toEmail.trim();
+  const safeToName = escapeHtml(toName.trim() || 'there');
+  const safeGroupName = escapeHtml(groupName.trim());
+  const safeTitle = escapeHtml(title.trim());
+  const minutesUrl = `${appUrl.replace(/\/$/, '')}/groups/${encodeURIComponent(groupId)}?minutes=${encodeURIComponent(minutesId)}`;
+  const safeMinutesUrl = escapeHtml(minutesUrl);
+
+  await transport.sendMail({
+    from: sender,
+    to: safeToEmail,
+    subject: `Minutes ready: ${title.trim()}`,
+    text: [
+      `Hi ${toName.trim() || 'there'},`,
+      '',
+      `AI meeting minutes for "${title.trim()}" (${groupName.trim()}) are ready.`,
+      `Read them here: ${minutesUrl}`,
+      '',
+      summaryMarkdown,
+    ].join('\n'),
+    html: `
+      <div style="font-family:Arial,Helvetica,sans-serif;line-height:1.6;color:#0f172a;max-width:640px">
+        <h2 style="margin:0 0 16px;font-size:20px;color:#0f172a">Meeting minutes are ready</h2>
+        <p style="margin:0 0 12px">Hi ${safeToName},</p>
+        <p style="margin:0 0 16px">AI minutes for <strong>${safeTitle}</strong> in <strong>${safeGroupName}</strong> are ready.</p>
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;margin:0 0 20px">
+          ${renderSummaryHtml(summaryMarkdown)}
+        </div>
+        <p style="margin:0 0 20px">
+          <a href="${safeMinutesUrl}" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:600">
+            View full minutes
+          </a>
+        </p>
+        <p style="margin:0;color:#475569">Includes the full transcript and downloadable notes.</p>
+      </div>
+    `,
+  });
+
+  return {};
 }
 
 export async function sendOtpEmail({ to, displayName, otp, expiresInMinutes = 10 }: SendOtpEmailArgs) {

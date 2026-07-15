@@ -3,8 +3,9 @@
 import axios from 'axios';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
+import { LuMail, LuCalendarDays, LuImage, LuCircleCheck, LuSave } from 'react-icons/lu';
 import api from '@/lib/api';
+import AppHeader from '@/components/AppHeader';
 
 type ProfileUser = {
   id: string;
@@ -174,35 +175,33 @@ export default function ProfilePage() {
   };
 
   return (
-    <main className="min-h-screen app-root px-6 py-10 text-white">
+    <main className="min-h-screen app-root px-5 pb-16 pt-6 text-white sm:px-6">
       <div className="mx-auto max-w-5xl">
-        <div className="mb-8 flex flex-wrap items-center justify-between gap-4 rounded-3xl card p-6 md:p-8">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.3em] text-cyan-300/80">Profile</p>
-            <h1 className="mt-4 text-4xl font-semibold tracking-tight">Your account</h1>
-            <p className="mt-4 max-w-2xl text-base leading-7 muted">Update your display name, bio, contact details, and avatar.</p>
+        <AppHeader />
+
+        <header className="card card-hero animate-fade-up mb-8 flex flex-wrap items-center gap-6 p-7 md:p-9">
+          <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-3xl border border-[var(--border)] bg-white/5 font-display text-3xl font-semibold">
+            {profileForm.avatarUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={profileForm.avatarUrl} alt="Profile avatar preview" className="h-full w-full object-cover" />
+            ) : (
+              <span className="gradient-text">{(profileForm.displayName || profile?.email || 'U').slice(0, 1).toUpperCase()}</span>
+            )}
           </div>
+          <div className="min-w-0">
+            <p className="eyebrow">Profile</p>
+            <h1 className="mt-3 truncate font-display text-3xl font-semibold tracking-tight sm:text-4xl">
+              {profileLoading ? 'Your account' : (profileForm.displayName || profile?.email || 'Your account')}
+            </h1>
+            <p className="mt-2 text-base leading-7 muted">Update your display name, bio, contact details, and avatar.</p>
+          </div>
+        </header>
 
-          <Link href="/dashboard" className="btn btn-ghost">
-            Back to dashboard
-          </Link>
-        </div>
-
-        <div className="grid gap-8 xl:grid-cols-[1.05fr_0.95fr]">
-          <div className="card p-8">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-2xl font-bold">Edit profile</h2>
-                <p className="mt-2 muted">Change how you appear in meetings.</p>
-              </div>
-              <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl border" style={{ borderColor: 'var(--border)', background: 'rgba(255,255,255,0.02)' }}>
-                {profileForm.avatarUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={profileForm.avatarUrl} alt="Profile avatar preview" className="h-full w-full object-cover" />
-                ) : (
-                  <span className="text-2xl font-semibold">{(profileForm.displayName || profile?.email || 'U').slice(0, 1).toUpperCase()}</span>
-                )}
-              </div>
+        <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+          <div className="card p-6 md:p-8">
+            <div>
+              <h2 className="font-display text-2xl font-semibold">Edit profile</h2>
+              <p className="mt-1.5 muted">Change how you appear in meetings.</p>
             </div>
 
             <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -257,28 +256,47 @@ export default function ProfilePage() {
             </div>
 
             <div className="mt-6 flex flex-wrap items-center gap-3">
-              <button type="button" onClick={handleSaveProfile} disabled={profileSaving || profileLoading} className="btn-primary h-12 rounded-xl px-5">
-                {profileSaving ? 'Saving...' : 'Save profile'}
+              <button type="button" onClick={handleSaveProfile} disabled={profileSaving || profileLoading} className="btn btn-primary h-12">
+                <LuSave aria-hidden="true" /> {profileSaving ? 'Saving…' : 'Save profile'}
               </button>
-              {profileNotice && <p className="text-sm" style={{ color: 'var(--accent)' }}>{profileNotice}</p>}
-              {profileError && <p className="text-sm" style={{ color: 'var(--danger)' }}>{profileError}</p>}
+              {profileNotice && (
+                <p className="inline-flex items-center gap-1.5 text-sm" style={{ color: 'var(--accent)' }}>
+                  <LuCircleCheck aria-hidden="true" /> {profileNotice}
+                </p>
+              )}
+              {profileError && <p className="text-sm text-rose-300">{profileError}</p>}
             </div>
           </div>
 
-          <div className="card p-8">
-            <h2 className="text-2xl font-bold">Account info</h2>
-            <div className="mt-6 space-y-4 text-sm">
-              <div className="rounded-2xl tile p-4">
-                <p className="text-xs muted">Email</p>
-                <p className="mt-1 font-medium">{profile?.email || 'Loading...'}</p>
+          <div className="card p-6 md:p-8">
+            <h2 className="font-display text-2xl font-semibold">Account info</h2>
+            <div className="mt-6 space-y-3 text-sm">
+              <div className="flex items-start gap-3 rounded-2xl tile p-4">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-white/5 text-[var(--accent)]">
+                  <LuMail aria-hidden="true" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-xs text-faint">Email</p>
+                  <p className="mt-0.5 truncate font-medium">{profile?.email || 'Loading…'}</p>
+                </div>
               </div>
-              <div className="rounded-2xl tile p-4">
-                <p className="text-xs muted">Joined</p>
-                <p className="mt-1 font-medium">{profileLoading ? 'Loading...' : profile?.createdAt ? formatDateTime(profile.createdAt) : 'Unknown'}</p>
+              <div className="flex items-start gap-3 rounded-2xl tile p-4">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-white/5 text-[var(--accent)]">
+                  <LuCalendarDays aria-hidden="true" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-xs text-faint">Joined</p>
+                  <p className="mt-0.5 font-medium">{profileLoading ? 'Loading…' : profile?.createdAt ? formatDateTime(profile.createdAt) : 'Unknown'}</p>
+                </div>
               </div>
-              <div className="rounded-2xl tile p-4">
-                <p className="text-xs muted">Profile photo</p>
-                <p className="mt-1 font-medium">{profileForm.avatarUrl ? 'Uploaded' : 'No photo uploaded yet'}</p>
+              <div className="flex items-start gap-3 rounded-2xl tile p-4">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-white/5 text-[var(--accent)]">
+                  <LuImage aria-hidden="true" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-xs text-faint">Profile photo</p>
+                  <p className="mt-0.5 font-medium">{profileForm.avatarUrl ? 'Uploaded' : 'No photo uploaded yet'}</p>
+                </div>
               </div>
             </div>
           </div>

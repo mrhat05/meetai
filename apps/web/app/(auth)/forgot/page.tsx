@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { LuKeyRound, LuArrowLeft, LuArrowRight } from 'react-icons/lu';
 import api from '@/lib/api';
 
 export default function ForgotPage() {
@@ -46,52 +48,75 @@ export default function ForgotPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-6 py-12 app-root">
-      <div className="w-full max-w-md card p-6">
-        <h2 className="text-2xl font-semibold mb-4" style={{ color: 'var(--foreground)' }}>Forgot password</h2>
-        {error ? <div className="mb-4 text-sm" style={{ color: 'var(--danger)' }}>{error}</div> : null}
-        {notice ? <div className="mb-4 text-sm" style={{ color: 'var(--accent)' }}>{notice}</div> : null}
+    <div className="flex min-h-screen items-center justify-center px-4 py-12 app-root sm:px-6">
+      <div className="animate-fade-up w-full max-w-md">
+        <div className="card card-hero p-7 sm:p-8">
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--border)] bg-[rgba(124,108,246,0.14)] text-2xl text-[var(--primary)]">
+            <LuKeyRound aria-hidden="true" />
+          </span>
+          <h2 className="mt-5 font-display text-2xl font-semibold tracking-tight">Reset your password</h2>
+          <p className="mt-2 text-sm leading-6 muted">
+            {step === 'request'
+              ? 'Enter your email and we’ll send you a 6-digit verification code.'
+              : 'Enter the code we sent, then choose a new password.'}
+          </p>
 
-        {step === 'request' && (
-          <form onSubmit={handleRequest} className="space-y-4">
-            <label className="block">
-              <span className="text-sm font-medium">Email</span>
-              <input value={email} onChange={(e) => setEmail(e.target.value)} required type="email" className="auth-input mt-1" />
-            </label>
+          {error ? (
+            <div className="mt-5 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">{error}</div>
+          ) : null}
+          {notice ? (
+            <div className="mt-5 rounded-xl border px-4 py-3 text-sm" style={{ background: 'rgba(52,211,193,0.08)', borderColor: 'rgba(52,211,193,0.2)', color: 'var(--accent)' }}>{notice}</div>
+          ) : null}
 
-            <button type="submit" className="btn-primary w-full">Send code</button>
-          </form>
-        )}
+          {step === 'request' && (
+            <form onSubmit={handleRequest} className="mt-6 space-y-4">
+              <label className="block">
+                <span className="mb-2 block text-sm font-medium muted">Email</span>
+                <input value={email} onChange={(e) => setEmail(e.target.value)} required type="email" placeholder="you@example.com" className="auth-input" />
+              </label>
 
-        {step === 'verify' && (
-          <form onSubmit={handleReset} className="space-y-4">
-            <label className="block">
-              <span className="text-sm font-medium">Verification code</span>
-              <input value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0,6))} required type="text" inputMode="numeric" className="auth-input mt-1" />
-            </label>
+              <button type="submit" disabled={isLoading} className="btn btn-primary h-12 w-full">
+                {isLoading ? 'Sending…' : (<>Send code <LuArrowRight aria-hidden="true" /></>)}
+              </button>
+            </form>
+          )}
 
-            <label className="block">
-              <span className="text-sm font-medium">New password</span>
-              <input value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required type="password" className="auth-input mt-1" />
-            </label>
+          {step === 'verify' && (
+            <form onSubmit={handleReset} className="mt-6 space-y-4">
+              <label className="block">
+                <span className="mb-2 block text-sm font-medium muted">Verification code</span>
+                <input value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0,6))} required type="text" inputMode="numeric" placeholder="123456" maxLength={6} className="auth-input text-center font-mono text-lg tracking-[0.5em]" />
+              </label>
 
-            <div className="flex gap-2">
-              <button type="submit" className="btn-primary flex-1">Reset password</button>
-              <button type="button" onClick={async () => {
-                setIsLoading(true);
-                setError('');
-                try {
-                  const { data } = await api.post('/auth/password/request-otp', { email });
-                  setNotice(data.message || `We sent a fresh code to ${email}.`);
-                } catch (err: any) {
-                  setError(err?.response?.data?.error ?? 'Could not resend code');
-                } finally {
-                  setIsLoading(false);
-                }
-              }} className="btn">Resend</button>
-            </div>
-          </form>
-        )}
+              <label className="block">
+                <span className="mb-2 block text-sm font-medium muted">New password</span>
+                <input value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required type="password" placeholder="••••••••" className="auth-input" />
+              </label>
+
+              <div className="flex gap-3">
+                <button type="submit" disabled={isLoading} className="btn btn-primary h-12 flex-1">Reset password</button>
+                <button type="button" onClick={async () => {
+                  setIsLoading(true);
+                  setError('');
+                  try {
+                    const { data } = await api.post('/auth/password/request-otp', { email });
+                    setNotice(data.message || `We sent a fresh code to ${email}.`);
+                  } catch (err: any) {
+                    setError(err?.response?.data?.error ?? 'Could not resend code');
+                  } finally {
+                    setIsLoading(false);
+                  }
+                }} disabled={isLoading} className="btn h-12">Resend</button>
+              </div>
+            </form>
+          )}
+        </div>
+
+        <div className="mt-5 text-center">
+          <Link href="/login" className="inline-flex items-center gap-2 text-sm font-medium muted transition-colors hover:text-white">
+            <LuArrowLeft aria-hidden="true" /> Back to sign in
+          </Link>
+        </div>
       </div>
     </div>
   );

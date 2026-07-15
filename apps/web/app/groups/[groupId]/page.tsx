@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { LuArrowLeft, LuVideo, LuUserPlus, LuSparkles, LuTriangleAlert, LuFileText } from 'react-icons/lu';
 import api from '@/lib/api';
+import AppHeader from '@/components/AppHeader';
 import RoleBadge from '@/components/RoleBadge';
 import MinutesCard from '@/components/MinutesCard';
 import MinutesModal from '@/components/MinutesModal';
@@ -27,6 +29,8 @@ type GroupDetails = {
   created_at: string;
   is_active: boolean;
   summarizer_enabled: boolean;
+  active_room_code?: string | null;
+  is_meeting_active?: boolean;
   members: GroupMember[];
 };
 
@@ -83,9 +87,12 @@ function getInitials(name: string) {
 export default function GroupDetailPage() {
   const router = useRouter();
   const params = useParams<{ groupId?: string | string[] }>();
+  const searchParams = useSearchParams();
   const groupId = Array.isArray(params.groupId) ? params.groupId[0] : params.groupId;
-  const { minutesReadyAlert } = useGroupMeetingAlert();
+  const deepLinkHandledRef = useRef(false);
+  const { activeMeetingAlert, minutesReadyAlert } = useGroupMeetingAlert();
   const [group, setGroup] = useState<GroupDetails | null>(null);
+  const [activeRoomCode, setActiveRoomCode] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -117,6 +124,21 @@ export default function GroupDetailPage() {
     const decoded = decodeJwtPayload(accessToken);
     setCurrentUserId(decoded?.userId ?? null);
   }, []);
+
+  // Deep link from minutes-ready emails/banners: /groups/:id?minutes=<minutesId>
+  // opens the Minutes tab with that entry's modal, then cleans the URL.
+  useEffect(() => {
+    if (deepLinkHandledRef.current || !groupId) return;
+
+    const minutesParam = searchParams.get('minutes');
+    if (!minutesParam) return;
+
+    deepLinkHandledRef.current = true;
+    setActiveTab('minutes');
+    setSelectedMinutes({ id: minutesParam });
+    setIsMinutesModalOpen(true);
+    router.replace(`/groups/${groupId}`, { scroll: false });
+  }, [groupId, router, searchParams]);
 
   useEffect(() => {
     if (!toastMessage) return undefined;
@@ -171,6 +193,7 @@ export default function GroupDetailPage() {
           ...data,
           members: data.members ?? [],
         });
+        setActiveRoomCode(data.active_room_code ?? null);
       } catch (requestError: any) {
         console.error('Failed to load group details:', requestError);
         setError(requestError.response?.data?.error || 'Failed to load group');
@@ -198,7 +221,17 @@ export default function GroupDetailPage() {
       ...data,
       members: data.members ?? [],
     });
+    setActiveRoomCode(data.active_room_code ?? null);
   };
+
+  // When an owner/admin starts a meeting for THIS group, light up the join
+  // affordance immediately for a member already viewing the page.
+  useEffect(() => {
+    if (!groupId || activeMeetingAlert?.groupId !== groupId) {
+      return;
+    }
+    setActiveRoomCode(activeMeetingAlert.roomCode);
+  }, [activeMeetingAlert, groupId]);
 
   const handleStartMeeting = async () => {
     if (!groupId) return;
@@ -298,7 +331,10 @@ export default function GroupDetailPage() {
         summarizer_enabled: enabled,
       });
 
-      setGroup(data);
+      // PATCH returns the group WITHOUT members (and without active-room fields),
+      // so merge onto the current group instead of replacing it — otherwise
+      // group.members becomes undefined and the members list crashes on render.
+      setGroup((current) => (current ? { ...current, ...data, members: current.members } : current));
       setSettingsMessage(enabled ? 'Meeting summarizer enabled' : 'Meeting summarizer disabled');
     } catch (requestError: any) {
       console.error('Failed to update group settings:', requestError);
@@ -365,21 +401,31 @@ export default function GroupDetailPage() {
         </button>
       )}
 
-      <div className="mx-auto max-w-7xl">
+      <div className="mx-auto max-w-6xl">
+        <AppHeader />
+
         <div className="mb-6 flex items-center justify-between gap-4">
-          <Link href="/dashboard" className="btn btn-ghost rounded-xl px-4 py-2">
-            ← Back
+          <Link href="/groups" className="btn btn-ghost">
+            <LuArrowLeft aria-hidden="true" /> All groups
           </Link>
-          {canManageGroup && (
+          {activeRoomCode ? (
+            <button
+              type="button"
+              onClick={() => router.push(`/room/${activeRoomCode}`)}
+              className="btn btn-primary"
+            >
+              <LuVideo aria-hidden="true" /> Join meeting
+            </button>
+          ) : canManageGroup ? (
             <button
               type="button"
               onClick={handleStartMeeting}
               disabled={isStartingMeeting}
-              className="btn-primary rounded-xl px-5 py-3 font-semibold"
+              className="btn btn-primary"
             >
-              {isStartingMeeting ? 'Starting...' : 'Start meeting'}
+              <LuVideo aria-hidden="true" /> {isStartingMeeting ? 'Starting…' : 'Start meeting'}
             </button>
-          )}
+          ) : null}
         </div>
 
         {isLoading ? (
@@ -392,17 +438,17 @@ export default function GroupDetailPage() {
           <div className="grid gap-8 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
             <section className="card rounded-3xl p-6">
               <div className="flex items-start gap-4">
-                <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-3xl border border-white/10 bg-white/5">
+                <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-3xl border border-[var(--border)] bg-white/5 font-display">
                   {group.avatar_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={group.avatar_url} alt={`${group.name} avatar`} className="h-full w-full object-cover" />
                   ) : (
-                    <span className="text-2xl font-semibold">{getInitials(group.name)}</span>
+                    <span className="gradient-text text-2xl font-semibold">{getInitials(group.name)}</span>
                   )}
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  <h1 className="text-3xl font-semibold tracking-tight">{group.name}</h1>
+                  <h1 className="font-display text-3xl font-semibold tracking-tight">{group.name}</h1>
                   <p className="mt-3 text-sm leading-6 muted">
                     {group.description || 'No description provided for this group.'}
                   </p>
@@ -429,7 +475,9 @@ export default function GroupDetailPage() {
                   <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4">
                     <div className="flex items-start justify-between gap-4">
                       <div className="min-w-0">
-                        <p className="font-medium text-white">AI meeting summarizer</p>
+                        <p className="inline-flex items-center gap-2 font-medium text-white">
+                          <LuSparkles aria-hidden="true" className="text-[var(--accent)]" /> AI meeting summarizer
+                        </p>
                         <p className="mt-1 text-sm leading-6 text-white/65">
                           Automatically transcribes and summarizes every meeting in this group
                         </p>
@@ -461,11 +509,10 @@ export default function GroupDetailPage() {
                     </div>
 
                     {group.summarizer_enabled ? (
-                      <div className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-400/10 px-3 py-3 text-sm text-amber-100">
-                        <p className="font-medium">Warning</p>
-                        <p className="mt-1 leading-6">
-                          Audio from all meetings will be uploaded to the server and transcribed with Groq Whisper, then summarized there.
-                          Audio is not processed fully locally.
+                      <div className="mt-4 flex gap-2.5 rounded-2xl border border-amber-400/30 bg-amber-400/10 px-3.5 py-3 text-sm text-amber-100">
+                        <LuTriangleAlert aria-hidden="true" className="mt-0.5 shrink-0 text-base" />
+                        <p className="leading-6">
+                          <span className="font-semibold">Heads up:</span> audio from all meetings is uploaded and transcribed with Groq Whisper, then summarized there — it is not processed fully on-device.
                         </p>
                       </div>
                     ) : null}
@@ -475,16 +522,24 @@ export default function GroupDetailPage() {
                 )}
               </div>
 
-              {canManageGroup && (
+              {activeRoomCode ? (
+                <button
+                  type="button"
+                  onClick={() => router.push(`/room/${activeRoomCode}`)}
+                  className="btn btn-primary mt-6 h-12 w-full"
+                >
+                  <LuVideo aria-hidden="true" /> Join meeting
+                </button>
+              ) : canManageGroup ? (
                 <button
                   type="button"
                   onClick={handleStartMeeting}
                   disabled={isStartingMeeting}
-                  className="mt-6 btn-primary h-12 w-full rounded-xl px-5 font-semibold"
+                  className="btn btn-primary mt-6 h-12 w-full"
                 >
-                  {isStartingMeeting ? 'Starting...' : 'Start meeting'}
+                  <LuVideo aria-hidden="true" /> {isStartingMeeting ? 'Starting…' : 'Start meeting'}
                 </button>
-              )}
+              ) : null}
             </section>
 
             <section className="card rounded-3xl p-6">
@@ -587,8 +642,8 @@ export default function GroupDetailPage() {
                         placeholder="search by email"
                         className="auth-input sm:flex-1"
                       />
-                      <button type="submit" disabled={isInviting} className="btn-primary h-12 rounded-xl px-5 font-semibold">
-                        {isInviting ? 'Inviting...' : 'Invite'}
+                      <button type="submit" disabled={isInviting} className="btn btn-primary h-12">
+                        <LuUserPlus aria-hidden="true" /> {isInviting ? 'Inviting…' : 'Invite'}
                       </button>
                     </div>
                     {inviteMessage && <p className="mt-3 text-sm text-emerald-200">{inviteMessage}</p>}
@@ -597,11 +652,23 @@ export default function GroupDetailPage() {
               ) : (
                 <div className="mt-6">
                   {isMinutesLoading ? (
-                    <p className="text-sm muted">Loading minutes...</p>
+                    <div className="space-y-3">
+                      {[0, 1].map((n) => (
+                        <div key={n} className="flex items-center gap-3.5 rounded-2xl border border-[var(--border)] bg-white/[0.03] p-4">
+                          <div className="skeleton h-11 w-11 rounded-xl" />
+                          <div className="flex-1 space-y-2"><div className="skeleton h-4 w-40" /><div className="skeleton h-3 w-56" /></div>
+                        </div>
+                      ))}
+                    </div>
                   ) : minutesError ? (
-                    <p className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">{minutesError}</p>
+                    <p className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">{minutesError}</p>
                   ) : minutes.length === 0 ? (
-                    <p className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-sm muted">No meeting minutes yet.</p>
+                    <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed px-5 py-12 text-center" style={{ borderColor: 'var(--border-strong)' }}>
+                      <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[var(--border)] bg-white/5 text-xl text-violet-200">
+                        <LuFileText aria-hidden="true" />
+                      </span>
+                      <p className="text-sm muted">No meeting minutes yet. They&apos;ll appear here after a summarized meeting.</p>
+                    </div>
                   ) : (
                     <div className="space-y-3">
                       {minutes.map((minute) => (

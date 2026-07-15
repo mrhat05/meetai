@@ -77,3 +77,12 @@ export function emitToUser<TPayload>(userId: string, eventName: string, payload:
   socketServer.to(socketId).emit(eventName, payload);
   return true;
 }
+
+export function emitToRoom<TPayload>(roomCode: string, eventName: string, payload: TPayload) {
+  if (!socketServer) {
+    return false;
+  }
+
+  socketServer.to(roomCode).emit(eventName, payload);
+  return true;
+}

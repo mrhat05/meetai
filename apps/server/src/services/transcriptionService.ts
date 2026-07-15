@@ -1,7 +1,8 @@
-import { transcribeAudio } from '../../lib/transcribeAudio.js';
+import { transcribeAudio, transcribeAudioSegments } from '../../lib/transcribeAudio.js';
 
 const transcriptionService = {
   transcribeAudio,
+  transcribeAudioSegments,
 };
 
 export default transcriptionService;
