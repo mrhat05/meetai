@@ -76,7 +76,17 @@ api.interceptors.response.use(
         return Promise.reject(error);
       }
 
-      const { data } = await refreshClient.post<RefreshResponse>('/auth/refresh');
+      // Send the refresh token in the body, not only via cookie. In production
+      // the SPA (Vercel) and API (Render) are on different domains, so the
+      // httpOnly refresh cookie is a THIRD-PARTY cookie that Safari/iOS block and
+      // Chrome is phasing out — it often never reaches /auth/refresh. The body
+      // token keeps refresh working cross-domain; the cookie still serves as a
+      // fallback for same-site deployments.
+      const storedRefreshToken = window.localStorage.getItem('refreshToken');
+      const { data } = await refreshClient.post<RefreshResponse>(
+        '/auth/refresh',
+        storedRefreshToken ? { refreshToken: storedRefreshToken } : {},
+      );
 
       window.localStorage.setItem('accessToken', data.accessToken);
       originalRequest.headers = originalRequest.headers ?? {};
@@ -86,6 +96,7 @@ api.interceptors.response.use(
     } catch (refreshError) {
       if (typeof window !== 'undefined') {
         window.localStorage.removeItem('accessToken');
+        window.localStorage.removeItem('refreshToken');
         window.location.href = '/login';
       }
       return Promise.reject(refreshError);

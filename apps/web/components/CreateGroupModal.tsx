@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { LuX } from 'react-icons/lu';
 import api from '@/lib/api';
 
@@ -15,6 +15,21 @@ export default function CreateGroupModal({ open, onClose, onCreated }: CreateGro
   const [groupDescription, setGroupDescription] = useState('');
   const [groupError, setGroupError] = useState<string | null>(null);
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
+
+  // Close on Escape (ignored while a create request is in flight).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !isCreatingGroup) {
+        setGroupName('');
+        setGroupDescription('');
+        setGroupError(null);
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, isCreatingGroup, onClose]);
 
   if (!open) return null;
 
@@ -58,7 +73,7 @@ export default function CreateGroupModal({ open, onClose, onCreated }: CreateGro
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-md">
-      <div className="animate-pop-in card card-hero w-full max-w-lg p-6 md:p-7">
+      <div role="dialog" aria-modal="true" aria-label="Create a new group" className="animate-pop-in card card-hero w-full max-w-lg p-6 md:p-7">
         <div className="flex items-start justify-between gap-4">
           <div>
             <h3 className="font-display text-2xl font-semibold tracking-tight">New group</h3>

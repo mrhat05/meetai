@@ -271,7 +271,10 @@ export default function MinutesModal({ isOpen, groupId, minutesId, onClose }: Mi
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-md" onClick={onClose}>
       <div
-        className="animate-pop-in card card-hero max-h-[90vh] w-full max-w-3xl overflow-y-auto p-6 text-white"
+        role="dialog"
+        aria-modal="true"
+        aria-label={minutes?.title || 'Meeting minutes'}
+        className="animate-pop-in card card-hero max-h-[90vh] w-full max-w-3xl overflow-y-auto p-5 text-white sm:p-6"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between gap-4 border-b border-white/10 pb-4">
@@ -294,6 +297,7 @@ export default function MinutesModal({ isOpen, groupId, minutesId, onClose }: Mi
           </div>
         </div>
 
+        <div className="-mx-1 overflow-x-auto px-1 pb-1">
         <div className="inline-flex rounded-xl border border-white/10 bg-white/5 p-1">
           <button
             type="button"
@@ -340,6 +344,7 @@ export default function MinutesModal({ isOpen, groupId, minutesId, onClose }: Mi
           >
             <LuSparkles aria-hidden="true" /> Ask AI
           </button>
+        </div>
         </div>
 
         {isLoading ? (

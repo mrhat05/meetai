@@ -335,6 +335,18 @@ button {
   box-shadow: 0 0 0 3px rgba(124, 108, 246, 0.35), var(--shadow-sm);
 }
 
+/* Visible keyboard focus for links and any interactive element not styled
+   above. Mouse/touch clicks are unaffected — :focus-visible targets keyboard
+   navigation only. */
+a:focus-visible,
+[role="button"]:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid rgba(124, 108, 246, 0.7);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -354,6 +366,8 @@ textarea {
   border: 1px solid var(--border-strong);
   color: var(--foreground);
   padding: 0.8rem 1rem;
+  /* 16px min keeps text legible and stops iOS Safari from zooming on focus. */
+  font-size: 1rem;
   border-radius: var(--radius);
   outline: none;
   transition: border-color 160ms var(--ease), box-shadow 160ms var(--ease), background-color 160ms var(--ease);

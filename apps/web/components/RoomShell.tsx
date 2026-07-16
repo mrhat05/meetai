@@ -362,7 +362,7 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
   };
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden app-root text-white">
+    <div className="flex h-screen flex-col overflow-hidden app-root text-white supports-[height:100dvh]:h-[100dvh]">
       {toastMessage && (
         <div className="fixed left-1/2 top-6 z-50 -translate-x-1/2 rounded-full border border-amber-300/30 bg-amber-400/20 px-4 py-3 text-sm font-medium text-amber-50 shadow-xl shadow-black/25 backdrop-blur-md">
           {toastMessage}
@@ -400,7 +400,7 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
         </div>
       </header>
 
-      <main className={`${isChatOpen ? 'grid min-h-0 flex-1 gap-6 px-6 py-5 lg:grid-cols-[minmax(0,1fr)_24rem]' : 'flex min-h-0 flex-1 gap-6 px-6 py-5 items-start'} overflow-hidden`}>
+      <main className={`${isChatOpen ? 'grid min-h-0 flex-1 gap-6 px-4 pb-28 pt-4 sm:px-6 sm:pb-24 sm:pt-5 lg:grid-cols-[minmax(0,1fr)_24rem]' : 'flex min-h-0 flex-1 items-start gap-6 px-4 pb-28 pt-4 sm:px-6 sm:pb-24 sm:pt-5'} overflow-hidden`}>
         <section className="min-h-0 flex-1 rounded-3xl card p-5 overflow-hidden">
           {mediaError && (
             <div className="mb-4 rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-200">
@@ -414,7 +414,7 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
                 type="button"
                 onClick={() => setTilePage((current) => Math.max(0, current - 1))}
                 disabled={tilePage === 0 || meetingTiles.length <= 2}
-                className="btn flex h-14 w-14 self-center items-center justify-center rounded-full text-lg font-semibold disabled:opacity-40"
+                className="btn flex h-11 w-11 self-center items-center justify-center rounded-full text-lg font-semibold disabled:opacity-40 sm:h-14 sm:w-14"
                 aria-label="Previous tiles"
               >
                 <LuChevronLeft aria-hidden="true" />
@@ -448,7 +448,7 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
                 type="button"
                 onClick={() => setTilePage((current) => Math.min(pageCount - 1, current + 1))}
                 disabled={tilePage >= pageCount - 1 || meetingTiles.length <= 2}
-                className="btn flex h-14 w-14 self-center items-center justify-center rounded-full text-lg font-semibold disabled:opacity-40"
+                className="btn flex h-11 w-11 self-center items-center justify-center rounded-full text-lg font-semibold disabled:opacity-40 sm:h-14 sm:w-14"
                 aria-label="Next tiles"
               >
                 <LuChevronRight aria-hidden="true" />
@@ -541,7 +541,7 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
         )}
       </main>
 
-      <footer className="fixed bottom-0 left-0 right-0 z-40 border-t px-4 py-4 backdrop-blur-xl sm:px-6" style={{ borderColor: 'var(--border)', background: 'rgba(9, 13, 24, 0.82)' }}>
+      <footer className="fixed bottom-0 left-0 right-0 z-40 border-t px-4 pt-4 backdrop-blur-xl sm:px-6" style={{ borderColor: 'var(--border)', background: 'rgba(9, 13, 24, 0.82)', paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))' }}>
         <div className="mx-auto flex max-w-7xl items-center justify-center gap-2.5 sm:gap-3">
           <button
             type="button"

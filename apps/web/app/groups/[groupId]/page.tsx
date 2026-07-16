@@ -384,7 +384,7 @@ export default function GroupDetailPage() {
   };
 
   return (
-    <main className="min-h-screen app-root px-6 py-10 text-white">
+    <main className="min-h-screen app-root px-4 py-6 text-white sm:px-6 sm:py-10">
       {toastMessage && (
         <div className="fixed left-1/2 top-6 z-50 -translate-x-1/2 rounded-full border border-amber-300/30 bg-amber-400/20 px-4 py-3 text-sm font-medium text-amber-50 shadow-xl shadow-black/25 backdrop-blur-md">
           {toastMessage}

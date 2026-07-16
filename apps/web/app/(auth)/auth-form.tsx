@@ -89,6 +89,9 @@ export default function AuthForm({ mode }: AuthFormProps) {
         });
 
         window.localStorage.setItem('accessToken', data.accessToken);
+        if (data.refreshToken) {
+          window.localStorage.setItem('refreshToken', data.refreshToken);
+        }
         // Let the shared realtime socket re-connect with the new identity so
         // meeting alerts start arriving without a page reload.
         window.dispatchEvent(new Event('meetai:auth'));
@@ -121,6 +124,9 @@ export default function AuthForm({ mode }: AuthFormProps) {
       const { data } = await api.post<AuthResponse>(endpoint, payload);
 
       window.localStorage.setItem('accessToken', data.accessToken);
+      if (data.refreshToken) {
+        window.localStorage.setItem('refreshToken', data.refreshToken);
+      }
       // Let the shared realtime socket re-connect with the new identity so
       // meeting alerts start arriving without a page reload.
       window.dispatchEvent(new Event('meetai:auth'));

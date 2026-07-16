@@ -16,6 +16,7 @@ export default function AppHeader() {
 
   const handleLogout = () => {
     window.localStorage.removeItem('accessToken');
+    window.localStorage.removeItem('refreshToken');
     window.localStorage.removeItem('displayName');
     window.localStorage.removeItem('userName');
     window.localStorage.removeItem('userEmail');
