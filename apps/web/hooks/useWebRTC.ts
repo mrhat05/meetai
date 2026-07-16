@@ -139,7 +139,37 @@ export default function useWebRTC(roomCode: string, localStream: MediaStream | n
       });
     };
 
-    const ensureConnection = (peerId: string) => {
+    // Guards against sending overlapping offers to the same peer.
+    const makingOffer = new Set<string>();
+
+    const makeOffer = async (peerId: string) => {
+      const connection = peerConnectionsRef.current.get(peerId);
+      // Only offer from a stable state. If a negotiation is already in flight the
+      // browser re-fires `negotiationneeded` once we return to stable, so bailing
+      // here loses nothing.
+      if (!connection || makingOffer.has(peerId) || connection.signalingState !== 'stable') {
+        return;
+      }
+
+      try {
+        makingOffer.add(peerId);
+        const offer = await connection.createOffer();
+        await connection.setLocalDescription(offer);
+        socket.emit('offer', { to: peerId, offer });
+      } catch (error) {
+        console.error('Failed to create offer', error);
+      } finally {
+        makingOffer.delete(peerId);
+      }
+    };
+
+    // `isInitiator` is true only for the peer joining an existing call. That peer
+    // drives (re)negotiation via `negotiationneeded`; the peer already in the room
+    // only ever answers, so the two never glare. Renegotiation is what makes
+    // late-arriving local media reach the peer — on mobile, getUserMedia often
+    // resolves AFTER we've connected, so the first offer is receive-only and the
+    // tracks must be re-offered once they exist, or our audio/video never sends.
+    const ensureConnection = (peerId: string, isInitiator = false) => {
       const existingConnection = peerConnectionsRef.current.get(peerId);
       if (existingConnection) {
         addLocalTracksToPeer(existingConnection, localStreamRef.current);
@@ -148,9 +178,6 @@ export default function useWebRTC(roomCode: string, localStream: MediaStream | n
 
       const connection = new RTCPeerConnection(rtcConfig);
       peerConnectionsRef.current.set(peerId, connection);
-
-      addLocalTracksToPeer(connection, localStreamRef.current);
-      ensureReceiveOnlyTransceivers(connection);
 
       connection.onicecandidate = (event) => {
         if (!event.candidate) return;
@@ -172,19 +199,18 @@ export default function useWebRTC(roomCode: string, localStream: MediaStream | n
         });
       };
 
-      return connection;
-    };
-
-    const createAndSendOffer = async (peerId: string) => {
-      const connection = ensureConnection(peerId);
-
-      try {
-        const offer = await connection.createOffer();
-        await connection.setLocalDescription(offer);
-        socket.emit('offer', { to: peerId, offer });
-      } catch (error) {
-        console.error('Failed to create offer', error);
+      if (isInitiator) {
+        connection.onnegotiationneeded = () => {
+          void makeOffer(peerId);
+        };
       }
+
+      // Added after the handler above so the initial track/transceiver additions
+      // trigger `negotiationneeded` and send the first offer.
+      addLocalTracksToPeer(connection, localStreamRef.current);
+      ensureReceiveOnlyTransceivers(connection);
+
+      return connection;
     };
 
     const setPeerInfo = (peerId: string, info: PeerPresence) => {
@@ -202,7 +228,9 @@ export default function useWebRTC(roomCode: string, localStream: MediaStream | n
       });
 
       peers.forEach(({ peerId }) => {
-        void createAndSendOffer(peerId);
+        // Initiator: `negotiationneeded` fires from the track/transceiver setup
+        // inside ensureConnection and sends the first offer.
+        ensureConnection(peerId, true);
       });
     };
 
