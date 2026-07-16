@@ -399,7 +399,7 @@ export default function GroupDetailPage() {
   };
 
   return (
-    <main className="min-h-screen app-root px-4 py-6 text-white sm:px-6 sm:py-10">
+    <main className="min-h-screen app-root overflow-x-clip px-4 py-6 text-white sm:px-6 sm:py-10">
       {toastMessage && (
         <div className="fixed left-1/2 top-6 z-50 w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-full border border-amber-300/30 bg-amber-400/20 px-4 py-3 text-center text-sm font-medium text-amber-50 shadow-xl shadow-black/25 backdrop-blur-md">
           {toastMessage}
@@ -451,7 +451,7 @@ export default function GroupDetailPage() {
           <div className="card rounded-3xl p-8 text-sm text-red-300">{error || 'Group not found'}</div>
         ) : (
           <div className="grid gap-8 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
-            <section className="card rounded-3xl p-6">
+            <section className="card min-w-0 rounded-3xl p-6">
               <div className="flex items-start gap-4">
                 <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-3xl border border-[var(--border)] bg-white/5 font-display">
                   {group.avatar_url ? (
@@ -557,7 +557,7 @@ export default function GroupDetailPage() {
               ) : null}
             </section>
 
-            <section className="card rounded-3xl p-6">
+            <section className="card min-w-0 rounded-3xl p-6">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
                   <h2 className="text-2xl font-semibold tracking-tight">Group workspace</h2>

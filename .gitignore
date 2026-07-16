@@ -1,0 +1,5 @@
+apps/client/
+apps/server/node_modules
+apps/web/node_modules
+.env    
+ROADMAP.md
