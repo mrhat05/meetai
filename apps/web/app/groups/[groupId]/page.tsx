@@ -383,10 +383,25 @@ export default function GroupDetailPage() {
     setSelectedMinutes({ id: minutesId });
   };
 
+  const workspaceTabRefs = useRef<{ members: HTMLButtonElement | null; minutes: HTMLButtonElement | null }>({
+    members: null,
+    minutes: null,
+  });
+
+  const handleWorkspaceTabKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+
+    event.preventDefault();
+    const next =
+      event.key === 'Home' ? 'members' : event.key === 'End' ? 'minutes' : activeTab === 'members' ? 'minutes' : 'members';
+    setActiveTab(next);
+    workspaceTabRefs.current[next]?.focus();
+  };
+
   return (
     <main className="min-h-screen app-root px-4 py-6 text-white sm:px-6 sm:py-10">
       {toastMessage && (
-        <div className="fixed left-1/2 top-6 z-50 -translate-x-1/2 rounded-full border border-amber-300/30 bg-amber-400/20 px-4 py-3 text-sm font-medium text-amber-50 shadow-xl shadow-black/25 backdrop-blur-md">
+        <div className="fixed left-1/2 top-6 z-50 w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-full border border-amber-300/30 bg-amber-400/20 px-4 py-3 text-center text-sm font-medium text-amber-50 shadow-xl shadow-black/25 backdrop-blur-md">
           {toastMessage}
         </div>
       )}
@@ -395,7 +410,7 @@ export default function GroupDetailPage() {
         <button
           type="button"
           onClick={handleOpenMinutesReadyToast}
-          className="fixed bottom-6 right-6 z-50 rounded-2xl border border-emerald-400/30 bg-emerald-500/15 px-4 py-3 text-left text-sm font-medium text-emerald-100 shadow-2xl shadow-black/30 transition hover:-translate-y-0.5 hover:bg-emerald-500/20"
+          className="fixed inset-x-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-50 rounded-2xl border border-emerald-400/30 bg-emerald-500/15 px-4 py-3 text-left text-sm font-medium text-emerald-100 shadow-2xl shadow-black/30 transition hover:-translate-y-0.5 hover:bg-emerald-500/20 sm:inset-x-auto sm:bottom-6 sm:right-6"
         >
           Meeting summary is ready — view minutes
         </button>
@@ -550,9 +565,22 @@ export default function GroupDetailPage() {
                 </div>
               </div>
 
-              <div className="mt-6 inline-flex rounded-xl border border-white/10 bg-white/5 p-1">
+              <div
+                role="tablist"
+                aria-label="Group workspace sections"
+                onKeyDown={handleWorkspaceTabKeyDown}
+                className="mt-6 grid grid-cols-2 rounded-xl border border-white/10 bg-white/5 p-1 sm:inline-flex"
+              >
                 <button
+                  ref={(element) => {
+                    workspaceTabRefs.current.members = element;
+                  }}
                   type="button"
+                  role="tab"
+                  id="workspace-tab-members"
+                  aria-selected={activeTab === 'members'}
+                  aria-controls="workspace-panel-members"
+                  tabIndex={activeTab === 'members' ? 0 : -1}
                   onClick={() => setActiveTab('members')}
                   className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
                     activeTab === 'members' ? 'bg-white text-slate-900' : 'text-white/75 hover:text-white'
@@ -561,7 +589,15 @@ export default function GroupDetailPage() {
                   Members
                 </button>
                 <button
+                  ref={(element) => {
+                    workspaceTabRefs.current.minutes = element;
+                  }}
                   type="button"
+                  role="tab"
+                  id="workspace-tab-minutes"
+                  aria-selected={activeTab === 'minutes'}
+                  aria-controls="workspace-panel-minutes"
+                  tabIndex={activeTab === 'minutes' ? 0 : -1}
                   onClick={() => setActiveTab('minutes')}
                   className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
                     activeTab === 'minutes' ? 'bg-white text-slate-900' : 'text-white/75 hover:text-white'
@@ -572,7 +608,7 @@ export default function GroupDetailPage() {
               </div>
 
               {activeTab === 'members' ? (
-                <>
+                <div role="tabpanel" id="workspace-panel-members" aria-labelledby="workspace-tab-members">
                   <div className="mt-6 space-y-3">
                     {group.members.map((member) => {
                       const isSelf = member.user_id === currentUserId;
@@ -648,9 +684,9 @@ export default function GroupDetailPage() {
                     </div>
                     {inviteMessage && <p className="mt-3 text-sm text-emerald-200">{inviteMessage}</p>}
                   </form>
-                </>
+                </div>
               ) : (
-                <div className="mt-6">
+                <div role="tabpanel" id="workspace-panel-minutes" aria-labelledby="workspace-tab-minutes" className="mt-6">
                   {isMinutesLoading ? (
                     <div className="space-y-3">
                       {[0, 1].map((n) => (
