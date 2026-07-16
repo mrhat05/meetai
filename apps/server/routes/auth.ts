@@ -22,11 +22,18 @@ const pendingRegistrationModel = prisma as typeof prisma & {
 const JWT_ACCESS_EXPIRES = '15m';
 const JWT_REFRESH_EXPIRES = '15d';
 
+// In production the frontend (Vercel) and backend (Render) are on different
+// sites, so the refresh cookie must be SameSite=None; Secure or the browser
+// won't send it on the cross-site /auth/refresh XHR — the access token then
+// expires after 15m and the user gets logged out. Locally everything is
+// same-site (localhost), so Lax over http is correct.
+const isProduction = process.env.NODE_ENV === 'production';
+
 function setRefreshTokenCookie(res: any, refreshToken: string) {
   res.cookie('refreshToken', refreshToken, {
     httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    sameSite: isProduction ? 'none' : 'lax',
+    secure: isProduction,
     path: '/',
     maxAge: 15 * 24 * 60 * 60 * 1000,
   });
