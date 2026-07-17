@@ -21,7 +21,9 @@ type SendMinutesReadyEmailArgs = {
   groupName: string;
   title: string;
   summaryMarkdown: string;
-  groupId: string;
+  // groupId present → group deep-link; absent → the standalone-meeting page.
+  groupId?: string | null;
+  roomCode: string;
   minutesId: string;
 };
 
@@ -150,6 +152,7 @@ export async function sendMinutesReadyEmail({
   title,
   summaryMarkdown,
   groupId,
+  roomCode,
   minutesId,
 }: SendMinutesReadyEmailArgs) {
   const transport = getTransport();
@@ -173,7 +176,10 @@ export async function sendMinutesReadyEmail({
   const safeToName = escapeHtml(toName.trim() || 'there');
   const safeGroupName = escapeHtml(groupName.trim());
   const safeTitle = escapeHtml(title.trim());
-  const minutesUrl = `${appUrl.replace(/\/$/, '')}/groups/${encodeURIComponent(groupId)}?minutes=${encodeURIComponent(minutesId)}`;
+  const baseUrl = appUrl.replace(/\/$/, '');
+  const minutesUrl = groupId
+    ? `${baseUrl}/groups/${encodeURIComponent(groupId)}?minutes=${encodeURIComponent(minutesId)}`
+    : `${baseUrl}/room/${encodeURIComponent(roomCode)}/minutes`;
   const safeMinutesUrl = escapeHtml(minutesUrl);
 
   await transport.sendMail({

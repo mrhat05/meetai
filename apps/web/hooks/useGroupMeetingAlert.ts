@@ -10,8 +10,10 @@ export type GroupMeetingAlert = {
 };
 
 export type MinutesReadyAlert = {
-  groupId: string;
+  // null for a normal (non-group) meeting → link to /room/:roomCode/minutes.
+  groupId: string | null;
   minutesId: string;
+  roomCode?: string;
 };
 
 type ServerToClientEvents = {

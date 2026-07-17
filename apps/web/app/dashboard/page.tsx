@@ -10,6 +10,7 @@ import {
   LuArrowUpRight,
   LuCalendarClock,
   LuSparkles,
+  LuFileText,
   LuX,
 } from 'react-icons/lu';
 import api from '@/lib/api';
@@ -101,7 +102,11 @@ export default function DashboardPage() {
             </p>
             <div className="flex shrink-0 items-center gap-2">
               <Link
-                href={`/groups/${minutesReadyAlert.groupId}?minutes=${minutesReadyAlert.minutesId}`}
+                href={
+                  minutesReadyAlert.groupId
+                    ? `/groups/${minutesReadyAlert.groupId}?minutes=${minutesReadyAlert.minutesId}`
+                    : `/room/${minutesReadyAlert.roomCode}/minutes`
+                }
                 className="inline-flex items-center gap-2 rounded-xl bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-950 shadow-sm transition hover:-translate-y-px hover:bg-white"
               >
                 View minutes <LuArrowRight aria-hidden="true" />
@@ -233,6 +238,43 @@ export default function DashboardPage() {
             </div>
           </section>
         </div>
+
+        {/* Your meeting minutes (group + normal meetings you hosted) */}
+        {(summary?.myMinutes?.length ?? 0) > 0 && (
+          <section className="card mt-6 p-5 md:p-6">
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--border)] bg-white/5 text-violet-200">
+                <LuFileText aria-hidden="true" />
+              </span>
+              <div>
+                <h2 className="font-display text-lg font-semibold">Your meeting minutes</h2>
+                <p className="text-xs muted">AI notes from meetings you hosted</p>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-2">
+              {summary!.myMinutes!.map((item) => (
+                <button
+                  key={item.minutesId}
+                  type="button"
+                  onClick={() => router.push(`/room/${item.roomCode}/minutes`)}
+                  className="flex w-full items-center gap-3 rounded-xl border border-[var(--border)] bg-white/[0.02] px-3 py-2.5 text-left transition hover:border-[var(--border-strong)] hover:bg-white/[0.05]"
+                >
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[var(--border)] bg-white/5 text-violet-200">
+                    <LuFileText aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-white">{item.title}</p>
+                    <p className="truncate text-xs text-faint">
+                      {new Date(item.createdAt).toLocaleDateString()} · {item.isGroup ? 'Group meeting' : 'Personal meeting'}
+                    </p>
+                  </div>
+                  <LuArrowRight aria-hidden="true" className="shrink-0 text-white/40" />
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
 
       <CreateGroupModal

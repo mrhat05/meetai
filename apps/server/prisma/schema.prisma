@@ -65,6 +65,7 @@ model Group {
   members GroupMember[]
   rooms   Room[]
   meetingMinutes MeetingMinute[]
+  minuteChunks MeetingMinuteChunk[]
 
   @@map("groups")
 }
@@ -90,6 +91,7 @@ model Room {
   roomCode  String        @map("room_code") @unique
   name      String?
   isActive  Boolean       @default(true) @map("is_active")
+  summarizerEnabled Boolean @default(false) @map("summarizer_enabled")
   createdAt DateTime      @default(now()) @map("created_at")
   endedAt   DateTime?     @map("ended_at")
   host      User?         @relation("HostRooms", fields: [hostId], references: [id])
@@ -132,7 +134,7 @@ model Message {
 model MeetingMinute {
   id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   roomId           String   @unique @map("room_id") @db.Uuid
-  groupId          String   @map("group_id") @db.Uuid
+  groupId          String?  @map("group_id") @db.Uuid
   createdBy        String?  @map("created_by") @db.Uuid
   title            String   @db.VarChar(200)
   rawTranscript    String   @map("raw_transcript")
@@ -143,8 +145,32 @@ model MeetingMinute {
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   room           Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  group          Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  group          Group? @relation(fields: [groupId], references: [id], onDelete: Cascade)
   createdByUser  User?  @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  chunks         MeetingMinuteChunk[]
 
   @@map("meeting_minutes")
+}
+
+// RAG chunks for "Ask AI across all meetings". The `embedding` column is a
+// pgvector type Prisma doesn't model natively — it's declared Unsupported so
+// the schema stays in sync (a future `migrate dev` won't drop the table), and
+// every read/write goes through raw SQL (`$queryRaw`), the pattern used across
+// this codebase. group_id is denormalized from the parent minutes so the
+// retrieval permission filter is a single indexed column.
+model MeetingMinuteChunk {
+  id         String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  minutesId  String                     @map("minutes_id") @db.Uuid
+  groupId    String                     @map("group_id") @db.Uuid
+  chunkIndex Int                        @map("chunk_index")
+  chunkText  String                     @map("chunk_text")
+  embedding  Unsupported("vector(384)")
+  createdAt  DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  minutes MeetingMinute @relation(fields: [minutesId], references: [id], onDelete: Cascade)
+  group   Group         @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([minutesId, chunkIndex])
+  @@index([groupId])
+  @@map("meeting_minute_chunks")
 }

@@ -61,6 +61,8 @@ const everyone = [owner, memberA, memberB, outsider];
 
 let groupId = '';
 let roomCode = '';
+let secondGroupId = '';
+let standaloneRoomCode = '';
 
 /** Minimal JSON HTTP helper against the running app. */
 async function api(
@@ -163,12 +165,18 @@ after(async () => {
       return;
     }
 
-    if (groupId) {
-      await db.meetingMinute.deleteMany({ where: { groupId } });
+    for (const gid of [groupId, secondGroupId]) {
+      if (!gid) continue;
+      // meeting_minute_chunks cascade from minutes/group deletion.
+      await db.meetingMinute.deleteMany({ where: { groupId: gid } });
       // Deleting rooms cascades participants and messages.
-      await db.room.deleteMany({ where: { groupId } });
-      await db.groupMember.deleteMany({ where: { groupId } });
-      await db.group.deleteMany({ where: { id: groupId } });
+      await db.room.deleteMany({ where: { groupId: gid } });
+      await db.groupMember.deleteMany({ where: { groupId: gid } });
+      await db.group.deleteMany({ where: { id: gid } });
+    }
+    // Standalone (group-less) room + its cascaded minutes.
+    if (standaloneRoomCode) {
+      await db.room.deleteMany({ where: { roomCode: standaloneRoomCode } });
     }
     const ids = everyone.map((u) => u.id).filter(Boolean);
     if (ids.length) {
@@ -387,5 +395,107 @@ test('AI transcriber pipeline for a 3-member group meeting', async (t) => {
     const detail = await api('GET', `/groups/${groupId}/minutes/${newest.id}`, { token: owner.token });
     assert.equal(detail.status, 200);
     assert.match(detail.data.raw_transcript, /Test Owner: Welcome everyone/, 'host is the labeled speaker');
+  });
+
+  await t.test('RAG: cross-meeting Ask answers with citations to this group\'s meetings', async () => {
+    // Both meetings were embedded by the worker during ingestion, so retrieval
+    // has chunks to find. (AI_STUB uses deterministic vectors + a stub answer.)
+    const res = await api('POST', `/groups/${groupId}/ask`, {
+      token: memberA.token,
+      body: { question: 'What did we decide about the release across our meetings?' },
+    });
+    assert.equal(res.status, 200, JSON.stringify(res.data));
+    assert.match(res.data.answer, /ship on Friday/, 'answer should come from the (stubbed) group QA');
+    assert.ok(Array.isArray(res.data.sources) && res.data.sources.length > 0, 'should cite at least one source');
+
+    // Every cited source must be a real meeting in THIS group.
+    const list = await api('GET', `/groups/${groupId}/minutes`, { token: owner.token });
+    const groupMinuteIds = new Set(list.data.map((minute: { id: string }) => minute.id));
+    for (const source of res.data.sources) {
+      assert.ok(typeof source.minutesId === 'string' && source.minutesId, 'source has a minutesId');
+      assert.ok(typeof source.title === 'string' && source.title, 'source has a title');
+      assert.ok(groupMinuteIds.has(source.minutesId), `cited source ${source.minutesId} belongs to this group`);
+    }
+  });
+
+  await t.test('RAG: retrieval is tenant-isolated — another group sees none of these chunks', async () => {
+    // The outsider spins up their OWN group with no meetings. If the retrieval
+    // query were missing its `WHERE group_id = ...` filter, this group's Ask
+    // would surface the first group's chunks. It must return zero sources.
+    const create = await api('POST', '/groups', {
+      token: outsider.token,
+      body: { name: `Second Group ${suffix}`, description: 'isolation test' },
+    });
+    assert.equal(create.status, 201, JSON.stringify(create.data));
+    secondGroupId = create.data.id;
+
+    const res = await api('POST', `/groups/${secondGroupId}/ask`, {
+      token: outsider.token,
+      body: { question: 'What did we decide about the release across our meetings?' },
+    });
+    assert.equal(res.status, 200, JSON.stringify(res.data));
+    assert.deepEqual(res.data.sources, [], 'an empty group must retrieve none of another group\'s chunks');
+  });
+
+  await t.test('RAG: cross-meeting Ask rejects an empty question (400) and a non-member (403)', async () => {
+    const empty = await api('POST', `/groups/${groupId}/ask`, {
+      token: memberA.token,
+      body: { question: '   ' },
+    });
+    assert.equal(empty.status, 400, `expected 400, got ${empty.status}`);
+
+    const forbidden = await api('POST', `/groups/${groupId}/ask`, {
+      token: outsider.token,
+      body: { question: 'What did we decide?' },
+    });
+    assert.equal(forbidden.status, 403, `expected 403, got ${forbidden.status}`);
+  });
+
+  await t.test('normal (non-group) meeting: opt-in generates minutes with a null group', async () => {
+    const create = await api('POST', '/rooms/create', {
+      token: owner.token,
+      body: { summarizerEnabled: true, name: 'Solo standup' },
+    });
+    assert.equal(create.status, 200, JSON.stringify(create.data));
+    standaloneRoomCode = create.data.room.roomCode;
+    assert.ok(standaloneRoomCode, 'standalone room should have a code');
+    assert.equal(create.data.room.summarizerEnabled, true, 'opt-in flag should persist');
+
+    const end = await uploadMeetingTracks(owner.token, standaloneRoomCode);
+    assert.equal(end.status, 202, JSON.stringify(end.data));
+
+    // Poll the new room-scoped route until the worker finishes the job.
+    let detail: any = null;
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 15_000) {
+      const res = await api('GET', `/rooms/${standaloneRoomCode}/minutes`, { token: owner.token });
+      if (res.status === 200) { detail = res.data; break; }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    assert.ok(detail, 'minutes should be generated for the standalone meeting');
+    assert.equal(detail.group_id, null, 'standalone minutes have no group');
+    assert.match(detail.raw_transcript, /Test Owner: Welcome everyone/, 'host speech is transcribed');
+    assert.equal(detail.participant_count, 1, 'single bare track counts one speaker');
+  });
+
+  await t.test('normal meeting minutes are host-scoped + Ask-AI works; opt-out is refused', async () => {
+    // A user with no relationship to the room can't read it.
+    const forbidden = await api('GET', `/rooms/${standaloneRoomCode}/minutes`, { token: outsider.token });
+    assert.equal(forbidden.status, 403, `expected 403, got ${forbidden.status}`);
+
+    // Single-meeting Ask-AI works without any group.
+    const ask = await api('POST', `/rooms/${standaloneRoomCode}/minutes/ask`, {
+      token: owner.token,
+      body: { question: 'What did we decide?' },
+    });
+    assert.equal(ask.status, 200, JSON.stringify(ask.data));
+    assert.match(ask.data.answer, /ship on Friday/, 'answer from the stubbed QA');
+
+    // A normal meeting that did NOT opt in cannot generate a summary.
+    const plain = await api('POST', '/rooms/create', { token: owner.token, body: {} });
+    const plainCode = plain.data.room.roomCode;
+    const refused = await uploadMeetingTracks(owner.token, plainCode);
+    assert.equal(refused.status, 400, 'summaries must be opted in');
+    await db.room.deleteMany({ where: { roomCode: plainCode } });
   });
 });

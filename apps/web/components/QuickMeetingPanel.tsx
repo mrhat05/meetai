@@ -2,12 +2,13 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { LuVideo, LuArrowRight, LuCopy, LuCircleCheck, LuX } from 'react-icons/lu';
+import { LuVideo, LuArrowRight, LuCopy, LuCircleCheck, LuX, LuSparkles } from 'react-icons/lu';
 import api from '@/lib/api';
 
 export default function QuickMeetingPanel() {
   const router = useRouter();
   const [roomCode, setRoomCode] = useState('');
+  const [summarizerEnabled, setSummarizerEnabled] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
@@ -21,7 +22,7 @@ export default function QuickMeetingPanel() {
       setError(null);
       setCopyStatus(null);
 
-      const response = await api.post('/rooms/create');
+      const response = await api.post('/rooms/create', { summarizerEnabled });
       const newRoomCode = response.data.room.roomCode;
       const newInviteLink = response.data.joinUrl ?? `${window.location.origin}/room/${newRoomCode}`;
 
@@ -67,6 +68,17 @@ export default function QuickMeetingPanel() {
           <button onClick={handleCreateRoom} disabled={isCreating} className="btn btn-primary mt-3 h-12 w-full">
             <LuVideo aria-hidden="true" /> {isCreating ? 'Creating…' : 'Create room'}
           </button>
+          <label className="mt-3 flex cursor-pointer items-center gap-2.5 text-sm text-white/80">
+            <input
+              type="checkbox"
+              checked={summarizerEnabled}
+              onChange={(e) => setSummarizerEnabled(e.target.checked)}
+              className="h-4 w-4 shrink-0 accent-[var(--primary)]"
+            />
+            <span className="inline-flex items-center gap-1.5">
+              <LuSparkles aria-hidden="true" className="text-violet-200" /> Generate AI minutes for this meeting
+            </span>
+          </label>
         </div>
 
         {/* Divider */}

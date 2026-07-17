@@ -29,6 +29,9 @@ type RoomShellProps = {
 type RoomDetails = {
   hostId: string | null;
   group_name: string | null;
+  // Effective opt-in: group meetings inherit the group flag; normal meetings
+  // carry their own. The server computes this so the client uses one field.
+  summarizer_enabled: boolean;
   group: {
     summarizer_enabled: boolean;
   } | null;
@@ -224,7 +227,7 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
             const response = await api.get<RoomDetails>(`/rooms/${roomCode}`);
             setIsHost(response.data?.hostId === userId);
             setGroupName(response.data?.group_name ?? null);
-            setSummarizerEnabled(Boolean(response.data?.group?.summarizer_enabled));
+            setSummarizerEnabled(Boolean(response.data?.summarizer_enabled));
             return;
           } catch (lookupError: any) {
             lastError = lookupError;

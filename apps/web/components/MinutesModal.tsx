@@ -35,12 +35,36 @@ type MinutesDetail = {
   action_items: ActionItem[];
 };
 
+// A meeting's minutes are reachable two ways: nested under a group (group
+// meetings) or directly by room code (normal/standalone meetings). The modal
+// is otherwise identical, so it takes a discriminated source and derives the
+// three endpoints (detail / ask / action-item) from it.
+export type MinutesSource =
+  | { kind: 'group'; groupId: string; minutesId: string }
+  | { kind: 'room'; roomCode: string };
+
 type MinutesModalProps = {
   isOpen: boolean;
-  groupId: string;
-  minutesId: string | null;
+  source: MinutesSource | null;
   onClose: () => void;
 };
+
+function minutesEndpoints(source: MinutesSource) {
+  if (source.kind === 'group') {
+    const base = `/groups/${source.groupId}/minutes/${source.minutesId}`;
+    return {
+      detail: base,
+      ask: `${base}/ask`,
+      actionItem: (itemId: string) => `${base}/action-items/${itemId}`,
+    };
+  }
+  const base = `/rooms/${source.roomCode}/minutes`;
+  return {
+    detail: base,
+    ask: `${base}/ask`,
+    actionItem: (itemId: string) => `${base}/action-items/${itemId}`,
+  };
+}
 
 function formatMinutes(durationSeconds: number) {
   return `${Math.max(1, Math.round(durationSeconds / 60))} min`;
@@ -81,7 +105,8 @@ const TABS: { id: MinutesTab; label: string; Icon: IconType }[] = [
   { id: 'ask', label: 'Ask AI', Icon: LuSparkles },
 ];
 
-export default function MinutesModal({ isOpen, groupId, minutesId, onClose }: MinutesModalProps) {
+export default function MinutesModal({ isOpen, source, onClose }: MinutesModalProps) {
+  const endpoints = source ? minutesEndpoints(source) : null;
   const [isLoading, setIsLoading] = useState(false);
   const [minutes, setMinutes] = useState<MinutesDetail | null>(null);
   const [activeTab, setActiveTab] = useState<MinutesTab>('summary');
@@ -97,7 +122,7 @@ export default function MinutesModal({ isOpen, groupId, minutesId, onClose }: Mi
   const [togglingItemId, setTogglingItemId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isOpen || !minutesId) return;
+    if (!isOpen || !endpoints) return;
 
     let isMounted = true;
 
@@ -111,7 +136,7 @@ export default function MinutesModal({ isOpen, groupId, minutesId, onClose }: Mi
         setQaInput('');
         setActionItems([]);
 
-        const { data } = await api.get<MinutesDetail>(`/groups/${groupId}/minutes/${minutesId}`);
+        const { data } = await api.get<MinutesDetail>(endpoints.detail);
         if (isMounted) {
           setMinutes(data);
           setActionItems(Array.isArray(data.action_items) ? data.action_items : []);
@@ -133,7 +158,7 @@ export default function MinutesModal({ isOpen, groupId, minutesId, onClose }: Mi
     return () => {
       isMounted = false;
     };
-  }, [groupId, isOpen, minutesId]);
+  }, [isOpen, endpoints?.detail]);
 
   // Lock the page behind the dialog so mobile swipe-scroll can't move it.
   useEffect(() => {
@@ -203,7 +228,7 @@ export default function MinutesModal({ isOpen, groupId, minutesId, onClose }: Mi
 
   const handleAskQuestion = async (rawQuestion?: string) => {
     const question = (rawQuestion ?? qaInput).trim();
-    if (!question || isAsking || !minutesId) return;
+    if (!question || isAsking || !endpoints) return;
 
     const history = qaMessages
       .filter((message) => !message.isError)
@@ -216,7 +241,7 @@ export default function MinutesModal({ isOpen, groupId, minutesId, onClose }: Mi
 
     try {
       const { data } = await api.post<{ answer: string }>(
-        `/groups/${groupId}/minutes/${minutesId}/ask`,
+        endpoints.ask,
         { question, history }
       );
       setQaMessages((current) => [...current, { role: 'assistant', content: data.answer }]);
@@ -236,7 +261,7 @@ export default function MinutesModal({ isOpen, groupId, minutesId, onClose }: Mi
   };
 
   const handleToggleActionItem = async (item: ActionItem) => {
-    if (!minutesId || togglingItemId) return;
+    if (!endpoints || togglingItemId) return;
 
     const nextDone = !item.done;
     setTogglingItemId(item.id);
@@ -245,7 +270,7 @@ export default function MinutesModal({ isOpen, groupId, minutesId, onClose }: Mi
 
     try {
       const { data } = await api.patch<{ actionItems: ActionItem[] }>(
-        `/groups/${groupId}/minutes/${minutesId}/action-items/${item.id}`,
+        endpoints.actionItem(item.id),
         { done: nextDone }
       );
       if (Array.isArray(data.actionItems)) {

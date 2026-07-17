@@ -9,6 +9,7 @@ import AppHeader from '@/components/AppHeader';
 import RoleBadge from '@/components/RoleBadge';
 import MinutesCard from '@/components/MinutesCard';
 import MinutesModal from '@/components/MinutesModal';
+import GroupAskCard from '@/components/GroupAskCard';
 import useGroupMeetingAlert from '@/hooks/useGroupMeetingAlert';
 
 type GroupMember = {
@@ -737,6 +738,7 @@ export default function GroupDetailPage() {
                 </div>
               ) : (
                 <div role="tabpanel" id="workspace-panel-minutes" aria-labelledby="workspace-tab-minutes" className="mt-6">
+                  {groupId && <GroupAskCard groupId={groupId} onOpenMinutes={(id) => void handleOpenMinutes(id)} />}
                   {(minutesStatus === 'queued' || minutesStatus === 'processing') && (
                     <div className="mb-4 flex items-center gap-2.5 rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm font-medium text-amber-100">
                       <span className="h-2 w-2 animate-pulse rounded-full bg-amber-300" aria-hidden="true" />
@@ -795,8 +797,7 @@ export default function GroupDetailPage() {
 
       <MinutesModal
         isOpen={isMinutesModalOpen}
-        groupId={groupId ?? ''}
-        minutesId={selectedMinutes?.id ?? null}
+        source={groupId && selectedMinutes?.id ? { kind: 'group', groupId, minutesId: selectedMinutes.id } : null}
         onClose={() => {
           setIsMinutesModalOpen(false);
           setSelectedMinutes(null);

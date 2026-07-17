@@ -21,6 +21,14 @@ export type RecentMeeting = {
   hostName: string;
 };
 
+export type MyMinutesItem = {
+  roomCode: string;
+  title: string;
+  createdAt: string;
+  minutesId: string;
+  isGroup: boolean;
+};
+
 export type DashboardSummaryResponse = {
   overview: DashboardOverview;
   latestMeeting: {
@@ -30,6 +38,7 @@ export type DashboardSummaryResponse = {
     isActive: boolean;
   } | null;
   recentMeetings: RecentMeeting[];
+  myMinutes?: MyMinutesItem[];
 };
 
 export type GroupListItem = {

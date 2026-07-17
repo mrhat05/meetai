@@ -7,6 +7,9 @@ import { sendMeetingStartedEmail } from '../../lib/mailer.js';
 import { emitToUser } from '../socket/presence.ts';
 import { answerMinutesQuestion, type QaHistoryTurn } from '../services/minutesQaService.ts';
 import { minutesQueue } from '../queue/minutesQueue.ts';
+import { embedText } from '../services/embeddingService.ts';
+import { retrieveRelevantChunks } from '../services/minutesChunkService.ts';
+import { answerGroupQuestion, type RetrievedContext } from '../services/groupQaService.ts';
 
 const router = Router();
 
@@ -516,6 +519,76 @@ router.get('/:groupId/minutes/:minutesId', authMiddleware, async (req: Request, 
       return res.status(400).json({ error: 'Invalid group or minutes id' });
     }
     return res.status(500).json({ error: 'Failed to fetch group minutes detail' });
+  }
+});
+
+// POST /groups/:groupId/ask — RAG Ask-AI across ALL of a group's meetings.
+// Embeds the question, retrieves the nearest transcript chunks (filtered to
+// this group inside the SQL), and answers grounded strictly in them with
+// citations that deep-link to the source meeting.
+router.post('/:groupId/ask', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { groupId } = req.params as { groupId: string };
+    const userId = req.user!.userId;
+    const body = req.body as { question?: unknown };
+
+    const question = typeof body.question === 'string' ? body.question.trim() : '';
+    if (!question || question.length > 2000) {
+      return res.status(400).json({ error: 'question is required (max 2000 characters)' });
+    }
+
+    const memberships = await db.$queryRaw<Array<{ id: string }>>`
+      SELECT gm."id"
+      FROM "group_members" gm
+      WHERE gm."group_id"::text = ${groupId}
+        AND gm."user_id"::text = ${userId}
+      LIMIT 1
+    `;
+    if (!memberships[0]) {
+      return res.status(403).json({ error: 'Forbidden: you are not a member of this group' });
+    }
+
+    // Embed the question and retrieve — the group filter lives INSIDE the
+    // retrieval SQL, so cross-group chunks can never reach the model.
+    const queryVector = await embedText(question);
+    const retrieved = await retrieveRelevantChunks(groupId, queryVector, 8);
+
+    if (retrieved.length === 0) {
+      return res.json({
+        answer: "I couldn't find anything about that across your meetings yet.",
+        sources: [],
+      });
+    }
+
+    const chunks: RetrievedContext[] = retrieved.map((row) => ({
+      minutesId: row.minutes_id,
+      title: row.title,
+      text: row.chunk_text,
+    }));
+
+    // Sources = the distinct meetings the chunks came from, best-rank first.
+    const sources: Array<{ minutesId: string; title: string }> = [];
+    const seen = new Set<string>();
+    for (const chunk of chunks) {
+      if (!seen.has(chunk.minutesId)) {
+        seen.add(chunk.minutesId);
+        sources.push({ minutesId: chunk.minutesId, title: chunk.title });
+      }
+    }
+
+    try {
+      const answer = await answerGroupQuestion({ question, chunks });
+      return res.json({ answer, sources });
+    } catch (aiError) {
+      console.error('Group Ask-AI failed:', aiError);
+      return res.status(502).json({ error: 'AI is unavailable right now' });
+    }
+  } catch (error: any) {
+    console.error('Error answering group question:', error);
+    if (error?.code === '22P02') {
+      return res.status(400).json({ error: 'Invalid group id' });
+    }
+    return res.status(500).json({ error: 'Failed to answer question' });
   }
 });
 

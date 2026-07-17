@@ -3,7 +3,7 @@ import type { ActionItem } from './actionItemsService.js';
 
 type SaveMinutesInput = {
   roomId: string;
-  groupId: string;
+  groupId: string | null;
   createdBy: string;
   groupName: string;
   transcript: string;

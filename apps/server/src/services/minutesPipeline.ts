@@ -7,6 +7,9 @@ import { mergeSpeakerSegments } from './transcriptMerge.ts';
 import actionItemsService from './actionItemsService.ts';
 import { emitToUser } from '../socket/presence.ts';
 import { sendMinutesReadyEmail } from '../../lib/mailer.js';
+import { chunkTranscript } from './chunkTranscript.ts';
+import { embedTexts } from './embeddingService.ts';
+import { saveChunks } from './minutesChunkService.ts';
 
 export type UploadedTrack = {
   filePath: string;
@@ -22,7 +25,8 @@ export type UploadedTrack = {
 export type MinutesJobPayload = {
   roomId: string;
   roomCode: string;
-  groupId: string;
+  // null for a normal (non-group) meeting — minutes are owned by the host.
+  groupId: string | null;
   groupName: string;
   hostUserId: string;
   durationSeconds: number;
@@ -62,7 +66,7 @@ async function cleanupTrackFiles(tracks: UploadedTrack[]): Promise<void> {
  * title beats re-running the whole pipeline for a nicety).
  */
 export async function processMeetingMinutes(payload: MinutesJobPayload): Promise<void> {
-  const { roomId, groupId, groupName, hostUserId, durationSeconds, tracks } = payload;
+  const { roomId, roomCode, groupId, groupName, hostUserId, durationSeconds, tracks } = payload;
 
   const existingMinutes = await db.$queryRaw<Array<{ id: string }>>`
     SELECT mm."id" FROM "meeting_minutes" mm WHERE mm."room_id" = ${roomId}::uuid LIMIT 1
@@ -116,35 +120,61 @@ export async function processMeetingMinutes(payload: MinutesJobPayload): Promise
   });
 
   if (created) {
-    const groupMemberRows = await db.$queryRaw<Array<{ user_id: string; email: string; display_name: string }>>`
-      SELECT gm."user_id", u."email", u."display_name"
-      FROM "group_members" gm
-      INNER JOIN "users" u ON u."id" = gm."user_id"
-      WHERE gm."group_id" = ${groupId}::uuid
-    `;
-
     const minutesTitleRows = await db.$queryRaw<Array<{ title: string }>>`
       SELECT mm."title" FROM "meeting_minutes" mm WHERE mm."id" = ${minutesId}::uuid LIMIT 1
     `;
     const minutesTitle = minutesTitleRows[0]?.title ?? groupName;
 
-    for (const member of groupMemberRows) {
-      emitToUser(member.user_id, 'minutes-ready', {
+    // Recipients: a group meeting notifies every member; a normal meeting
+    // notifies only the host who owns it.
+    const recipients = groupId
+      ? await db.$queryRaw<Array<{ user_id: string; email: string; display_name: string }>>`
+          SELECT gm."user_id", u."email", u."display_name"
+          FROM "group_members" gm
+          INNER JOIN "users" u ON u."id" = gm."user_id"
+          WHERE gm."group_id" = ${groupId}::uuid
+        `
+      : await db.$queryRaw<Array<{ user_id: string; email: string; display_name: string }>>`
+          SELECT u."id" AS user_id, u."email", u."display_name"
+          FROM "users" u WHERE u."id" = ${hostUserId}::uuid
+        `;
+
+    for (const recipient of recipients) {
+      emitToUser(recipient.user_id, 'minutes-ready', {
         groupId,
         minutesId,
+        roomCode,
       });
 
       sendMinutesReadyEmail({
-        toEmail: member.email,
-        toName: member.display_name,
+        toEmail: recipient.email,
+        toName: recipient.display_name,
         groupName,
         title: minutesTitle,
         summaryMarkdown,
         groupId,
+        roomCode,
         minutesId,
       }).catch((emailError) => {
         console.error('Failed to send minutes-ready email:', emailError);
       });
+    }
+
+    // Ingest into the RAG index for cross-meeting Ask-AI (Flagship B) — only
+    // for group meetings; RAG is group-scoped, so standalone meetings are not
+    // embedded. NON-FATAL: if this threw, the job would retry, but the
+    // existence pre-check above would early-return and chunks would never be
+    // created. Gaps are repaired by scripts/backfill-embeddings.ts.
+    if (groupId) {
+      try {
+        const chunks = chunkTranscript(transcript, minutesTitle);
+        if (chunks.length > 0) {
+          const vectors = await embedTexts(chunks.map((chunk) => chunk.text));
+          await saveChunks(minutesId, groupId, chunks, vectors);
+        }
+      } catch (embedError) {
+        console.error('Minutes embedding (RAG ingestion) failed — backfillable:', embedError);
+      }
     }
   }
 
