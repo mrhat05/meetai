@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { LuVideo, LuSparkles, LuUsers, LuShieldCheck, LuArrowRight } from 'react-icons/lu';
 import api from '@/lib/api';
+import GoogleSignInButton, { type GoogleAuthResponse } from '@/components/GoogleSignInButton';
 
 const AUTH_HIGHLIGHTS = [
   { Icon: LuVideo, title: 'One-click rooms', body: 'Start HD video meetings and share an invite link instantly.' },
@@ -60,9 +61,45 @@ export default function AuthForm({ mode }: AuthFormProps) {
   const [registrationStep, setRegistrationStep] = useState<'details' | 'otp'>('details');
   const [otpNotice, setOtpNotice] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
   const [error, setError] = useState('');
 
   const isRegister = mode === 'register';
+  const showGoogle =
+    Boolean(process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID) && !(isRegister && registrationStep === 'otp');
+
+  // Shared post-auth handoff: persist tokens, refresh the realtime socket
+  // identity, cache display fields, and route to the dashboard. Used by the
+  // email flow and the Google button so they behave identically.
+  function completeAuth(data: AuthResponse | GoogleAuthResponse, fallbackName?: string) {
+    window.localStorage.setItem('accessToken', data.accessToken);
+    if (data.refreshToken) {
+      window.localStorage.setItem('refreshToken', data.refreshToken);
+    }
+    window.dispatchEvent(new Event('meetai:auth'));
+
+    const decodedPayload = decodeJwtPayload(data.accessToken);
+    const resolvedDisplayName =
+      (typeof decodedPayload?.displayName === 'string' && decodedPayload.displayName.trim()) ||
+      (fallbackName?.trim() || '') ||
+      (data.user?.displayName?.trim() || '') ||
+      (typeof decodedPayload?.email === 'string' ? decodedPayload.email.split('@')[0] : '') ||
+      'You';
+
+    window.localStorage.setItem('displayName', resolvedDisplayName);
+    window.localStorage.setItem('userName', resolvedDisplayName);
+
+    const emailForStore =
+      (typeof decodedPayload?.email === 'string' && decodedPayload.email.trim()) || data.user?.email;
+    if (emailForStore) {
+      window.localStorage.setItem('userEmail', emailForStore);
+    }
+    if (data.user?.avatarUrl) {
+      window.localStorage.setItem('avatarUrl', data.user.avatarUrl);
+    }
+
+    router.push('/dashboard');
+  }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -88,31 +125,7 @@ export default function AuthForm({ mode }: AuthFormProps) {
           otp,
         });
 
-        window.localStorage.setItem('accessToken', data.accessToken);
-        if (data.refreshToken) {
-          window.localStorage.setItem('refreshToken', data.refreshToken);
-        }
-        // Let the shared realtime socket re-connect with the new identity so
-        // meeting alerts start arriving without a page reload.
-        window.dispatchEvent(new Event('meetai:auth'));
-
-        const decodedPayload = decodeJwtPayload(data.accessToken);
-        const resolvedDisplayName =
-          (typeof decodedPayload?.displayName === 'string' && decodedPayload.displayName.trim()) ||
-          (displayName.trim() || '') ||
-          (typeof decodedPayload?.email === 'string' ? decodedPayload.email.split('@')[0] : '') ||
-          'You';
-
-        window.localStorage.setItem('displayName', resolvedDisplayName);
-        window.localStorage.setItem('userName', resolvedDisplayName);
-        if (typeof decodedPayload?.email === 'string' && decodedPayload.email.trim()) {
-          window.localStorage.setItem('userEmail', decodedPayload.email);
-        }
-        if (data.user?.avatarUrl) {
-          window.localStorage.setItem('avatarUrl', data.user.avatarUrl);
-        }
-
-        router.push('/dashboard');
+        completeAuth(data, displayName);
         return;
       }
 
@@ -123,31 +136,7 @@ export default function AuthForm({ mode }: AuthFormProps) {
 
       const { data } = await api.post<AuthResponse>(endpoint, payload);
 
-      window.localStorage.setItem('accessToken', data.accessToken);
-      if (data.refreshToken) {
-        window.localStorage.setItem('refreshToken', data.refreshToken);
-      }
-      // Let the shared realtime socket re-connect with the new identity so
-      // meeting alerts start arriving without a page reload.
-      window.dispatchEvent(new Event('meetai:auth'));
-
-      const decodedPayload = decodeJwtPayload(data.accessToken);
-      const resolvedDisplayName =
-        (typeof decodedPayload?.displayName === 'string' && decodedPayload.displayName.trim()) ||
-        (isRegister ? displayName.trim() : '') ||
-        (typeof decodedPayload?.email === 'string' ? decodedPayload.email.split('@')[0] : '') ||
-        'You';
-
-      window.localStorage.setItem('displayName', resolvedDisplayName);
-      window.localStorage.setItem('userName', resolvedDisplayName);
-      if (typeof decodedPayload?.email === 'string' && decodedPayload.email.trim()) {
-        window.localStorage.setItem('userEmail', decodedPayload.email);
-      }
-      if (data.user?.avatarUrl) {
-        window.localStorage.setItem('avatarUrl', data.user.avatarUrl);
-      }
-
-      router.push('/dashboard');
+      completeAuth(data, isRegister ? displayName : undefined);
     } catch (submissionError: any) {
       const status = submissionError?.response?.status;
       const message =
@@ -242,6 +231,25 @@ export default function AuthForm({ mode }: AuthFormProps) {
                 </div>
               )}
 
+              {showGoogle && (
+                <div className="mb-6">
+                  <GoogleSignInButton
+                    mode={mode}
+                    onSuccess={(data) => completeAuth(data)}
+                    onError={setError}
+                    onBusyChange={setGoogleBusy}
+                  />
+                  {googleBusy && (
+                    <p className="mt-3 text-center text-sm muted">Signing you in with Google…</p>
+                  )}
+                  <div className="my-6 flex items-center gap-3">
+                    <span className="h-px flex-1 bg-[var(--border)]" />
+                    <span className="text-xs text-faint">or continue with email</span>
+                    <span className="h-px flex-1 bg-[var(--border)]" />
+                  </div>
+                </div>
+              )}
+
               <form onSubmit={handleSubmit} className="space-y-5">
                 {isRegister && registrationStep === 'details' && (
                   <label className="block">
@@ -318,7 +326,7 @@ export default function AuthForm({ mode }: AuthFormProps) {
                   </p>
                 ) : null}
 
-                <button type="submit" disabled={isLoading} className="btn btn-primary h-12 w-full">
+                <button type="submit" disabled={isLoading || googleBusy} className="btn btn-primary h-12 w-full">
                   {isLoading ? (
                     'Please wait…'
                   ) : isRegister ? (

@@ -6,9 +6,12 @@ export type RetrievedContext = {
   text: string;
 };
 
+export type QaHistoryTurn = { role: 'user' | 'assistant'; content: string };
+
 type AnswerGroupQuestionInput = {
   question: string;
   chunks: RetrievedContext[];
+  history?: QaHistoryTurn[];
 };
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -25,7 +28,7 @@ const STUB_ANSWER = 'Stub answer across meetings: the team agreed to ship on Fri
  *
  * Throws on provider failure so the route maps it to a 502.
  */
-export async function answerGroupQuestion({ question, chunks }: AnswerGroupQuestionInput): Promise<string> {
+export async function answerGroupQuestion({ question, chunks, history = [] }: AnswerGroupQuestionInput): Promise<string> {
   if (process.env.AI_STUB === '1') {
     return STUB_ANSWER;
   }
@@ -38,16 +41,23 @@ export async function answerGroupQuestion({ question, chunks }: AnswerGroupQuest
     'You answer questions about a team\'s meetings using ONLY the excerpts provided below.',
     'Each excerpt is labeled [1], [2], etc. Cite the excerpts you use inline, e.g. "... shipped Friday [2]".',
     'If the excerpts do not contain the answer, say: "I couldn\'t find that across your meetings."',
-    'Be concise (a few sentences). Do not invent facts that are not in the excerpts.',
+    'Be concise. Do not invent facts that are not in the excerpts.',
+    'Format the answer in Markdown: **bold** key names, decisions and dates; use short bullet lists when listing multiple items or action items.',
     '',
     '--- EXCERPTS ---',
     context || '(no relevant excerpts found)',
   ].join('\n');
 
+  const boundedHistory = history.slice(-8).map((turn) => ({
+    role: turn.role,
+    content: turn.content.slice(0, 2000),
+  }));
+
   const completion = await groq.chat.completions.create({
     model: 'llama-3.1-8b-instant',
     messages: [
       { role: 'system', content: systemPrompt },
+      ...boundedHistory,
       { role: 'user', content: question },
     ],
     max_tokens: 512,

@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react';
 import { LuSparkles, LuSend, LuFileText } from 'react-icons/lu';
 import api from '@/lib/api';
+import ChatMarkdown from '@/components/ChatMarkdown';
 
 type Source = { minutesId: string; title: string };
 
@@ -112,7 +113,11 @@ export default function GroupAskCard({ groupId, onOpenMinutes }: GroupAskCardPro
                       : 'border border-white/10 bg-black/20 text-white/90'
                 }`}
               >
-                {message.content}
+                {message.role === 'assistant' && !message.isError ? (
+                  <ChatMarkdown content={message.content} />
+                ) : (
+                  message.content
+                )}
               </div>
               {message.sources && message.sources.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">

@@ -10,7 +10,8 @@ datasource db {
 model User {
   id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email        String     @unique
-  passwordHash String     @map("password_hash")
+  passwordHash String?    @map("password_hash")
+  googleId     String?    @unique @map("google_id")
   displayName  String     @map("display_name")
   avatarUrl    String?    @map("avatar_url")
   bio          String?    @map("bio")
@@ -25,6 +26,7 @@ model User {
   participants Participant[]
   messages     Message[]
   meetingMinutesCreated MeetingMinute[]
+  assistantThreads AssistantThread[]
 
   @@map("users")
 }
@@ -161,16 +163,45 @@ model MeetingMinute {
 model MeetingMinuteChunk {
   id         String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   minutesId  String                     @map("minutes_id") @db.Uuid
-  groupId    String                     @map("group_id") @db.Uuid
+  groupId    String?                    @map("group_id") @db.Uuid
   chunkIndex Int                        @map("chunk_index")
   chunkText  String                     @map("chunk_text")
   embedding  Unsupported("vector(384)")
   createdAt  DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
 
   minutes MeetingMinute @relation(fields: [minutesId], references: [id], onDelete: Cascade)
-  group   Group         @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  group   Group?        @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
   @@unique([minutesId, chunkIndex])
   @@index([groupId])
   @@map("meeting_minute_chunks")
+}
+
+// Persistent chat threads for the personal AI assistant (ChatGPT-style history).
+model AssistantThread {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  title     String   @db.VarChar(200)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  user     User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages AssistantMessage[]
+
+  @@index([userId, updatedAt])
+  @@map("assistant_threads")
+}
+
+model AssistantMessage {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  threadId  String   @map("thread_id") @db.Uuid
+  role      String   @db.VarChar(12)
+  content   String
+  sources   Json     @default("[]")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  thread AssistantThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+  @@map("assistant_messages")
 }

@@ -45,7 +45,8 @@ export async function answerMinutesQuestion({
   const systemPrompt = [
     'You are a meeting assistant. Answer questions using ONLY the meeting minutes provided below.',
     'If the answer is not in the minutes, say: "I don\'t know — that isn\'t covered in this meeting."',
-    'Be concise (a few sentences). Quote speakers or timestamps when helpful.',
+    'Be concise. Quote speakers or timestamps when helpful.',
+    'Format the answer in Markdown: **bold** key names/decisions and use short bullet lists when listing multiple items.',
     '',
     `Meeting: ${title}`,
     '',

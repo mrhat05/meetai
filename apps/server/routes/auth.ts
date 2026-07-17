@@ -2,11 +2,18 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { randomInt } from 'node:crypto';
+import { OAuth2Client } from 'google-auth-library';
 import prisma from '../db.js';
 import { authMiddleware } from '../middleware/authMiddleware.js';
 import { sendOtpEmail } from '../lib/mailer.js';
 
 const router = Router();
+
+// Google Sign-In verifies the ID token issued to the browser against this
+// client id (the token's `aud` must match). One shared verifier; the network
+// fetch for Google's signing certs is cached inside the library.
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
 const pendingRegistrationModel = prisma as typeof prisma & {
   pendingRegistration: {
     upsert: typeof prisma.pendingRegistration.upsert;
@@ -53,6 +60,38 @@ function signRefreshToken(payload: object) {
 
 function generateOtp() {
   return String(randomInt(100000, 1000000));
+}
+
+// The identity fields every auth route returns, and the shape of the JSON body.
+type SessionUser = {
+  id: string;
+  email: string;
+  displayName: string;
+  avatarUrl: string | null;
+  bio: string | null;
+  phoneNumber: string | null;
+  location: string | null;
+};
+
+// Sign the token pair, set the refresh cookie, and return the standard auth body.
+// Shared by /login, /register(+verify-otp), and /auth/google so they stay in lockstep.
+function issueSession(res: any, user: SessionUser) {
+  const accessToken = signAccessToken({ userId: user.id, email: user.email, displayName: user.displayName });
+  const refreshToken = signRefreshToken({ userId: user.id });
+  setRefreshTokenCookie(res, refreshToken);
+  return {
+    accessToken,
+    refreshToken,
+    user: {
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName,
+      avatarUrl: user.avatarUrl,
+      bio: user.bio,
+      phoneNumber: user.phoneNumber,
+      location: user.location,
+    },
+  };
 }
 
 router.post('/register/request-otp', async (req, res) => {
@@ -279,27 +318,89 @@ router.post('/login', async (req, res) => {
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) return res.status(404).json({ error: 'no account found with that email' });
 
+    // Google-only accounts have no password hash — steer them to the Google button
+    // instead of failing with a confusing "invalid credentials".
+    if (!user.passwordHash) {
+      return res.status(409).json({ error: 'This account uses Google sign-in. Continue with Google instead.' });
+    }
+
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) return res.status(401).json({ error: 'invalid credentials' });
-    const accessToken = signAccessToken({ userId: user.id, email: user.email, displayName: user.displayName });
-    const refreshToken = signRefreshToken({ userId: user.id });
 
-    setRefreshTokenCookie(res, refreshToken);
-
-    return res.json({
-      accessToken,
-      refreshToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        displayName: user.displayName,
-        avatarUrl: user.avatarUrl,
-        bio: user.bio,
-        phoneNumber: user.phoneNumber,
-        location: user.location,
-      },
-    });
+    return res.json(issueSession(res, user));
   } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Google Sign-In (Google Identity Services ID-token flow). The browser sends the
+// signed ID token ("credential") from the Google button; we verify it, then
+// find/link/create the local user and mint OUR OWN tokens — so the rest of the
+// app's auth is unchanged. Verification is the security boundary: never trust the
+// email/sub without a valid, audience-matched Google signature.
+router.post('/google', async (req, res) => {
+  try {
+    if (!googleClient || !GOOGLE_CLIENT_ID) {
+      return res.status(503).json({ error: 'Google sign-in is not configured' });
+    }
+
+    const { credential } = req.body as { credential?: string };
+    if (!credential) return res.status(400).json({ error: 'credential is required' });
+
+    let payload;
+    try {
+      const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
+      payload = ticket.getPayload();
+    } catch {
+      return res.status(401).json({ error: 'invalid Google credential' });
+    }
+
+    if (!payload?.sub || !payload.email) {
+      return res.status(401).json({ error: 'invalid Google credential' });
+    }
+    if (payload.email_verified === false) {
+      return res.status(401).json({ error: 'your Google email is not verified' });
+    }
+
+    const googleId = payload.sub;
+    const email = payload.email;
+    const name = (payload.name ?? email.split('@')[0] ?? email).trim();
+    const picture = payload.picture ?? null;
+
+    // 1) Known Google account → sign in. 2) Same email registered another way →
+    // link Google to it (and backfill an avatar if missing). 3) New → create a
+    // passwordless account.
+    let user = await prisma.user.findUnique({ where: { googleId } });
+    if (!user) {
+      const byEmail = await prisma.user.findUnique({ where: { email } });
+      if (byEmail) {
+        user = await prisma.user.update({
+          where: { id: byEmail.id },
+          data: { googleId, ...(byEmail.avatarUrl ? {} : { avatarUrl: picture }) },
+        });
+      } else {
+        user = await prisma.user.create({
+          data: {
+            email,
+            googleId,
+            passwordHash: null,
+            displayName: name,
+            avatarUrl: picture,
+            bio: null,
+            phoneNumber: null,
+            location: null,
+          },
+        });
+      }
+    }
+
+    return res.json(issueSession(res, user));
+  } catch (err: any) {
+    if (err?.code === 'P2002') {
+      // Rare race: the email/googleId got taken between our lookup and write.
+      return res.status(409).json({ error: 'account conflict, please try again' });
+    }
     console.error(err);
     return res.status(500).json({ error: 'internal error' });
   }

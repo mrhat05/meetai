@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { IconType } from 'react-icons';
+import ChatMarkdown from '@/components/ChatMarkdown';
 import {
   LuSparkles,
   LuSend,
@@ -536,7 +537,11 @@ export default function MinutesModal({ isOpen, source, onClose }: MinutesModalPr
                             : 'border border-white/10 bg-black/20 text-white/90'
                       }`}
                     >
-                      {message.content}
+                      {message.role === 'assistant' && !message.isError ? (
+                        <ChatMarkdown content={message.content} />
+                      ) : (
+                        message.content
+                      )}
                     </div>
                   ))
                 )}

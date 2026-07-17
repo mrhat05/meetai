@@ -5,6 +5,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import authRouter from '../routes/auth.js';
 import roomsRouter, { AUDIO_UPLOAD_DIR } from './routes/rooms.js';
 import groupsRouter from './routes/groups.js';
+import assistantRouter from './routes/assistant.ts';
 import signalingHandler from './socket/signaling.ts';
 import { registerSocketServer } from './socket/presence.ts';
 import { startMinutesWorker, stopMinutesWorker } from './queue/minutesWorker.ts';
@@ -44,6 +45,7 @@ app.use((err: any, _req: any, res: any, next: any) => {
 app.use('/auth', authRouter);
 app.use('/rooms', roomsRouter);
 app.use('/groups', groupsRouter);
+app.use('/assistant', assistantRouter);
 
 const server = http.createServer(app);
 const io = new SocketIOServer(server, {

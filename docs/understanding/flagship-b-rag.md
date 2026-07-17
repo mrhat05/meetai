@@ -164,7 +164,9 @@ Two things fall out:
 
 The two flagships compose: the same worker that transcribes + summarizes a meeting also
 **embeds it**, right after `saveMinutes`, inside the `if (created)` block. So a new meeting
-becomes searchable automatically.
+becomes searchable automatically. **Every** meeting is embedded — group meetings (chunk
+`group_id` set, retrievable in the group assistant) and personal meetings (chunk `group_id`
+NULL, retrievable in the per-user assistant — see §10).
 
 One subtlety worth explaining: ingestion is **best-effort / non-fatal** (wrapped in
 try/catch, like the email send). Why not let it fail the job and retry? Because the worker's
@@ -207,33 +209,86 @@ idempotency pre-check would skip embedding on the retry.
 
 ---
 
-## 10. Every file touched
+## 10. Extension — the personal assistant (RAG across ALL your meetings)
+
+The group assistant answers within **one** group. The **personal assistant** (`/assistant`
+page → `POST /rooms/assistant/ask`) answers across **everything a single user can see** —
+every group they belong to *and* their personal (non-group) meetings — one chat box for
+"what did I commit to across my meetings?".
+
+Two changes made it possible, and one of them is the whole security lesson again:
+
+1. **Ingestion widened to personal meetings.** Originally the worker only embedded group
+   meetings (`if (groupId)` guard). That guard is gone: personal meetings are embedded too,
+   with chunk `group_id = NULL`. So `meeting_minute_chunks.group_id` had to become nullable
+   (migration `20260717170000`).
+
+2. **Per-user authorization filter — generalized from "belongs to group X" to "this user is
+   allowed to see it".** The group query filtered `WHERE c.group_id = :groupId`. The personal
+   query (`retrievePersonalChunks`) filters, still **inside the SQL**:
+
+   ```sql
+   WHERE ( mm.group_id IS NOT NULL AND EXISTS (            -- a group I'm a member of
+             SELECT 1 FROM group_members gm
+             WHERE gm.group_id = mm.group_id AND gm.user_id = $userId) )
+      OR ( mm.group_id IS NULL AND mm.created_by = $userId ) -- a personal meeting I own
+   ```
+
+This is the same principle as §6 — **the ACL predicate is part of the vector query**, so the
+model never receives a chunk the user can't access. The difference is the predicate: instead
+of a single group id, it's "in one of my groups, or mine personally." Two properties fall out
+for free: leaving a group revokes access instantly (the filter reads live `group_members`),
+and cross-user leakage is impossible (a chunk from someone else's personal meeting or a group
+you're not in simply never matches). Personal meetings you only *participated* in (didn't
+host) are deliberately excluded — clean, auditable ownership.
+
+**Isolation is preserved everywhere.** The group `/ask` still filters `c.group_id = :groupId`,
+and personal chunks have `group_id = NULL`, so `NULL = :groupId` is never true — personal
+meetings can't leak into a group answer, and group B still can't see group A.
+
+**Citations route by kind.** Personal-assistant sources carry `roomCode` + `groupId`, so a
+group citation opens `/groups/:groupId?minutes=:id` and a personal citation opens
+`/room/:roomCode/minutes`.
+
+**Interview line:** *"Same retrieval-time-ACL discipline, generalized. Group RAG filters by a
+group id; the personal assistant filters by 'the caller is a member of the meeting's group, or
+owns the meeting' — still inside the SQL, so authorization is enforced at retrieval, never in
+the prompt."*
+
+---
+
+## 11. Every file touched
 
 | File | Role |
 |---|---|
 | `prisma/migrations/20260717000000_add_minutes_chunks/migration.sql` | `CREATE EXTENSION vector` + `meeting_minute_chunks` (HNSW cosine index, unique, group_id) |
-| `prisma/schema.prisma` | `MeetingMinuteChunk` model with `Unsupported("vector(384)")` |
+| `prisma/migrations/20260717170000_chunks_group_nullable_for_personal_rag/migration.sql` | `group_id` nullable — personal-meeting chunks |
+| `prisma/schema.prisma` | `MeetingMinuteChunk` model, `Unsupported("vector(384)")`, `groupId String?` |
 | `src/services/embeddingService.ts` | local MiniLM (lazy singleton), AI_STUB deterministic vectors, `toVectorLiteral` |
 | `src/services/chunkTranscript.ts` | ~800-char, ~100-overlap, speaker-turn-aware chunking |
-| `src/services/minutesChunkService.ts` | `saveChunks` (idempotent) + `retrieveRelevantChunks` (group filter in SQL) |
-| `src/services/groupQaService.ts` | grounded, cited generation; AI_STUB stub; throw→502 |
-| `src/services/minutesPipeline.ts` | best-effort ingestion hook inside the worker's `if (created)` |
-| `src/routes/groups.ts` | `POST /groups/:groupId/ask` (membership check, embed, retrieve, answer, cite) |
-| `scripts/backfill-embeddings.ts` | idempotent backfill for existing/failed-ingestion minutes |
-| `apps/web/components/GroupAskCard.tsx` | "Ask across meetings" chat card with citation chips |
-| `apps/web/app/groups/[groupId]/page.tsx` | mounts the card; chips reuse `handleOpenMinutes` |
-| `apps/server/test/transcriber.test.ts` | RAG citations + tenant-isolation + authz assertions |
+| `src/services/minutesChunkService.ts` | `saveChunks` (idempotent, nullable group) + `retrieveRelevantChunks` (group filter) + `retrievePersonalChunks` (per-user filter) |
+| `src/services/groupQaService.ts` | grounded, cited generation; AI_STUB stub; throw→502 (reused by both assistants) |
+| `src/services/minutesPipeline.ts` | best-effort ingestion inside `if (created)` — now embeds group AND personal |
+| `src/routes/groups.ts` | `POST /groups/:groupId/ask` (group assistant) |
+| `src/routes/rooms.ts` | `POST /rooms/assistant/ask` (personal assistant, per-user filter) |
+| `scripts/backfill-embeddings.ts` | idempotent backfill for existing/failed-ingestion minutes (all meetings) |
+| `apps/web/components/GroupAskCard.tsx` | group "Ask across meetings" card (chips reuse `handleOpenMinutes`) |
+| `apps/web/app/assistant/page.tsx` | personal assistant page (chips navigate by kind) |
+| `apps/web/components/AppHeader.tsx` | "Assistant" nav link |
+| `apps/server/test/transcriber.test.ts` | group citations + tenant-isolation + personal-assistant span + per-user isolation |
 
 ---
 
-## 11. The 45-second whiteboard version
+## 12. The 45-second whiteboard version
 
 > Each meeting's transcript is chunked (~800 chars, speaker-turn aware) and each chunk is
 > embedded locally with all-MiniLM-L6-v2 into a 384-dim normalized vector, stored in
 > Postgres via pgvector with an HNSW cosine index — ingested by the same BullMQ worker that
-> saved the minutes. To answer a group-wide question I embed the question and run a
-> nearest-neighbour search **filtered by group_id inside the SQL** (that's the tenant
-> isolation — the model never sees another group's data), take the top 8 chunks, and ask
-> Llama to answer using only those, citing the ones it used. The citations deep-link to the
-> source meeting. pgvector over a dedicated vector DB because the data's already in Postgres
-> and we're at thousands of vectors, not millions.
+> saved the minutes. To answer a question I embed it and run a nearest-neighbour search whose
+> **authorization filter lives inside the SQL**: the group assistant filters by `group_id`;
+> the personal assistant filters by "the caller is a member of the meeting's group, or owns
+> the meeting." Take the top 8 chunks, ask Llama to answer using only those, cite the ones it
+> used, deep-link the citations. The model never receives a chunk the caller can't access, so
+> there's no cross-group or cross-user leak — authorization is enforced at retrieval, not in
+> the prompt. pgvector over a dedicated vector DB because the data's already in Postgres and
+> we're at thousands of vectors, not millions.

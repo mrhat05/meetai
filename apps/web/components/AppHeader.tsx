@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { LuLayoutDashboard, LuCalendarClock, LuUsers, LuUser, LuLogOut } from 'react-icons/lu';
+import { LuLayoutDashboard, LuCalendarClock, LuUsers, LuUser, LuLogOut, LuSparkles } from 'react-icons/lu';
 
 const NAV_LINKS = [
   { href: '/dashboard', label: 'Home', Icon: LuLayoutDashboard },
   { href: '/meetings', label: 'Meetings', Icon: LuCalendarClock },
   { href: '/groups', label: 'Groups', Icon: LuUsers },
+  { href: '/assistant', label: 'Assistant', Icon: LuSparkles },
 ];
 
 export default function AppHeader() {

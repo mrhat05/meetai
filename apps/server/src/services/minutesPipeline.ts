@@ -160,21 +160,20 @@ export async function processMeetingMinutes(payload: MinutesJobPayload): Promise
       });
     }
 
-    // Ingest into the RAG index for cross-meeting Ask-AI (Flagship B) — only
-    // for group meetings; RAG is group-scoped, so standalone meetings are not
-    // embedded. NON-FATAL: if this threw, the job would retry, but the
-    // existence pre-check above would early-return and chunks would never be
-    // created. Gaps are repaired by scripts/backfill-embeddings.ts.
-    if (groupId) {
-      try {
-        const chunks = chunkTranscript(transcript, minutesTitle);
-        if (chunks.length > 0) {
-          const vectors = await embedTexts(chunks.map((chunk) => chunk.text));
-          await saveChunks(minutesId, groupId, chunks, vectors);
-        }
-      } catch (embedError) {
-        console.error('Minutes embedding (RAG ingestion) failed — backfillable:', embedError);
+    // Ingest into the RAG index for cross-meeting Ask-AI. Both group meetings
+    // (retrievable in the group assistant, keyed on group_id) AND personal
+    // meetings (retrievable in the per-user assistant, group_id NULL) are
+    // embedded. NON-FATAL: if this threw, the job would retry, but the existence
+    // pre-check above would early-return and chunks would never be created.
+    // Gaps are repaired by scripts/backfill-embeddings.ts.
+    try {
+      const chunks = chunkTranscript(transcript, minutesTitle);
+      if (chunks.length > 0) {
+        const vectors = await embedTexts(chunks.map((chunk) => chunk.text));
+        await saveChunks(minutesId, groupId, chunks, vectors);
       }
+    } catch (embedError) {
+      console.error('Minutes embedding (RAG ingestion) failed — backfillable:', embedError);
     }
   }
 

@@ -498,4 +498,62 @@ test('AI transcriber pipeline for a 3-member group meeting', async (t) => {
     assert.equal(refused.status, 400, 'summaries must be opted in');
     await db.room.deleteMany({ where: { roomCode: plainCode } });
   });
+
+  await t.test('personal assistant: RAG spans the user\'s group AND personal meetings', async () => {
+    const res = await api('POST', '/assistant/ask', {
+      token: owner.token,
+      body: { question: 'What did we decide about the release across everything?' },
+    });
+    assert.equal(res.status, 200, JSON.stringify(res.data));
+    assert.match(res.data.answer, /ship on Friday/, 'answer from the stubbed QA');
+    assert.ok(Array.isArray(res.data.sources) && res.data.sources.length > 0, 'should cite sources');
+
+    const hasGroupSource = res.data.sources.some((s: any) => s.groupId);
+    const hasPersonalSource = res.data.sources.some((s: any) => s.groupId === null && s.roomCode === standaloneRoomCode);
+    assert.ok(hasGroupSource, 'assistant surfaces the owner\'s group meeting');
+    assert.ok(hasPersonalSource, 'assistant surfaces the owner\'s personal meeting');
+  });
+
+  await t.test('personal assistant is per-user isolated', async () => {
+    // The outsider has only an empty group and no personal meetings, so their
+    // assistant must retrieve none of the owner's group or personal chunks.
+    const res = await api('POST', '/assistant/ask', {
+      token: outsider.token,
+      body: { question: 'What did we decide about the release across everything?' },
+    });
+    assert.equal(res.status, 200, JSON.stringify(res.data));
+    assert.deepEqual(res.data.sources, [], 'a user retrieves none of another user\'s meetings');
+  });
+
+  await t.test('assistant chat threads persist, list, and are owner-scoped', async () => {
+    // The owner's earlier ask created a thread — it should be listed.
+    const list = await api('GET', '/assistant/threads', { token: owner.token });
+    assert.equal(list.status, 200, JSON.stringify(list.data));
+    assert.ok(Array.isArray(list.data) && list.data.length > 0, 'owner has at least one thread');
+    const threadId = list.data[0].id;
+    assert.ok(list.data[0].title, 'thread has a title');
+
+    // Owner opens the full conversation (user + assistant turns stored).
+    const detail = await api('GET', `/assistant/threads/${threadId}`, { token: owner.token });
+    assert.equal(detail.status, 200, JSON.stringify(detail.data));
+    assert.ok(detail.data.messages.length >= 2, 'thread stored both turns');
+
+    // Another user cannot open it.
+    const forbidden = await api('GET', `/assistant/threads/${threadId}`, { token: outsider.token });
+    assert.equal(forbidden.status, 404, `expected 404 for non-owner, got ${forbidden.status}`);
+
+    // Follow-up stays in the same thread.
+    const followup = await api('POST', '/assistant/ask', {
+      token: owner.token,
+      body: { question: 'And what about action items?', threadId },
+    });
+    assert.equal(followup.status, 200, JSON.stringify(followup.data));
+    assert.equal(followup.data.threadId, threadId, 'follow-up stays in the same thread');
+
+    // Delete is owner-only.
+    const delForbidden = await api('DELETE', `/assistant/threads/${threadId}`, { token: outsider.token });
+    assert.equal(delForbidden.status, 404, 'non-owner cannot delete');
+    const del = await api('DELETE', `/assistant/threads/${threadId}`, { token: owner.token });
+    assert.equal(del.status, 200, 'owner deletes their thread');
+  });
 });
