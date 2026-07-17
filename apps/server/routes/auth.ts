@@ -5,6 +5,7 @@ import { randomInt } from 'node:crypto';
 import { OAuth2Client } from 'google-auth-library';
 import prisma from '../db.js';
 import { authMiddleware } from '../middleware/authMiddleware.js';
+import { authRateLimit, otpRateLimit } from '../middleware/rateLimit.js';
 import { sendOtpEmail } from '../lib/mailer.js';
 
 const router = Router();
@@ -94,7 +95,7 @@ function issueSession(res: any, user: SessionUser) {
   };
 }
 
-router.post('/register/request-otp', async (req, res) => {
+router.post('/register/request-otp', authRateLimit, async (req, res) => {
   try {
     const { email, password, display_name } = req.body as { email?: string; password?: string; display_name?: string };
     if (!email || !password) return res.status(400).json({ error: 'email and password are required' });
@@ -145,7 +146,7 @@ router.post('/register/request-otp', async (req, res) => {
   }
 });
 
-router.post('/register/verify-otp', async (req, res) => {
+router.post('/register/verify-otp', otpRateLimit, async (req, res) => {
   try {
     const { email, otp } = req.body as { email?: string; otp?: string };
     if (!email || !otp) return res.status(400).json({ error: 'email and otp are required' });
@@ -254,7 +255,7 @@ router.post('/register', async (req, res) => {
 });
 
 // Password reset: request OTP
-router.post('/password/request-otp', async (req, res) => {
+router.post('/password/request-otp', authRateLimit, async (req, res) => {
   try {
     const { email } = req.body as { email?: string };
     if (!email) return res.status(400).json({ error: 'email is required' });
@@ -282,7 +283,7 @@ router.post('/password/request-otp', async (req, res) => {
 });
 
 // Password reset: verify otp and set new password
-router.post('/password/reset', async (req, res) => {
+router.post('/password/reset', otpRateLimit, async (req, res) => {
   try {
     const { email, otp, new_password } = req.body as { email?: string; otp?: string; new_password?: string };
     if (!email || !otp || !new_password) return res.status(400).json({ error: 'email, otp and new_password are required' });
@@ -310,7 +311,7 @@ router.post('/password/reset', async (req, res) => {
   }
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', authRateLimit, async (req, res) => {
   try {
     const { email, password } = req.body as { email?: string; password?: string };
     if (!email || !password) return res.status(400).json({ error: 'email and password are required' });
@@ -339,7 +340,7 @@ router.post('/login', async (req, res) => {
 // find/link/create the local user and mint OUR OWN tokens — so the rest of the
 // app's auth is unchanged. Verification is the security boundary: never trust the
 // email/sub without a valid, audience-matched Google signature.
-router.post('/google', async (req, res) => {
+router.post('/google', authRateLimit, async (req, res) => {
   try {
     if (!googleClient || !GOOGLE_CLIENT_ID) {
       return res.status(503).json({ error: 'Google sign-in is not configured' });

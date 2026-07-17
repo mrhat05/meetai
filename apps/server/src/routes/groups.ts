@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { randomUUID } from 'node:crypto';
 import db from '../../db.js';
 import { authMiddleware } from '../../middleware/authMiddleware.js';
+import { askRateLimit } from '../../middleware/rateLimit.js';
 import { sendMeetingStartedEmail } from '../../lib/mailer.js';
 import { emitToUser } from '../socket/presence.ts';
 import { answerMinutesQuestion, type QaHistoryTurn } from '../services/minutesQaService.ts';
@@ -526,7 +527,7 @@ router.get('/:groupId/minutes/:minutesId', authMiddleware, async (req: Request, 
 // Embeds the question, retrieves the nearest transcript chunks (filtered to
 // this group inside the SQL), and answers grounded strictly in them with
 // citations that deep-link to the source meeting.
-router.post('/:groupId/ask', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:groupId/ask', authMiddleware, askRateLimit, async (req: Request, res: Response) => {
   try {
     const { groupId } = req.params as { groupId: string };
     const userId = req.user!.userId;
@@ -593,7 +594,7 @@ router.post('/:groupId/ask', authMiddleware, async (req: Request, res: Response)
 });
 
 // POST /groups/:groupId/minutes/:minutesId/ask — Ask-AI grounded in one meeting's minutes
-router.post('/:groupId/minutes/:minutesId/ask', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:groupId/minutes/:minutesId/ask', authMiddleware, askRateLimit, async (req: Request, res: Response) => {
   try {
     const { groupId, minutesId } = req.params as { groupId: string; minutesId: string };
     const userId = req.user!.userId;

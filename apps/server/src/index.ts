@@ -15,6 +15,11 @@ import { sweepStaleAudioUploads } from '../lib/audioSweeper.ts';
 
 const app = express();
 
+// Render (and most PaaS) put a reverse proxy in front, so the real client IP is
+// in X-Forwarded-For. Trust the first hop so `req.ip` — which the rate limiter
+// keys on — is the caller, not the proxy.
+app.set('trust proxy', 1);
+
 const clientOrigin = process.env.CLIENT_URL ?? 'http://localhost:3000';
 
 app.use((req, res, next) => {

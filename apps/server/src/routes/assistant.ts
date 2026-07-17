@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import db from '../../db.js';
 import { authMiddleware } from '../../middleware/authMiddleware.js';
+import { askRateLimit } from '../../middleware/rateLimit.js';
 import { embedText } from '../services/embeddingService.ts';
 import { retrievePersonalChunks } from '../services/minutesChunkService.ts';
 import { answerGroupQuestion, type QaHistoryTurn, type RetrievedContext } from '../services/groupQaService.ts';
@@ -79,7 +80,7 @@ router.delete('/threads/:id', authMiddleware, async (req: Request, res: Response
 // POST /assistant/ask — RAG across everything this user can see, within a thread.
 // { question, threadId? } — no threadId starts a new thread. Persists both turns
 // and uses prior turns of the thread as follow-up context.
-router.post('/ask', authMiddleware, async (req: Request, res: Response) => {
+router.post('/ask', authMiddleware, askRateLimit, async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
     const body = req.body as { question?: unknown; threadId?: unknown };

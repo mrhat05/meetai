@@ -1,4 +1,4 @@
-import { Redis } from 'ioredis';
+import { Redis, type RedisOptions } from 'ioredis';
 
 export const REDIS_URL = process.env.REDIS_URL?.trim() || 'redis://localhost:6379';
 
@@ -17,19 +17,30 @@ export const REDIS_URL = process.env.REDIS_URL?.trim() || 'redis://localhost:637
  */
 const openConnections: Redis[] = [];
 
-export function createRedisConnection(): Redis {
-  const connection = new Redis(REDIS_URL, {
-    maxRetriesPerRequest: null,
-  });
-
+function register(connection: Redis): Redis {
   // ioredis is an EventEmitter: an unhandled 'error' event would crash the
-  // process — exactly what a resilient queue must not do when Redis blips.
+  // process — exactly what a resilient service must not do when Redis blips.
   connection.on('error', (error: Error) => {
     console.error('Redis connection error:', error.message);
   });
 
   openConnections.push(connection);
   return connection;
+}
+
+export function createRedisConnection(): Redis {
+  return register(new Redis(REDIS_URL, { maxRetriesPerRequest: null }));
+}
+
+/**
+ * A general-purpose managed Redis client (registered for graceful shutdown).
+ * Unlike the BullMQ connection above, callers pass their own options — the rate
+ * limiter, for instance, wants `enableOfflineQueue: false` + a short
+ * `commandTimeout` so commands FAIL FAST when Redis is down (letting it
+ * fail-open) instead of queueing forever the way BullMQ requires.
+ */
+export function createManagedRedis(options: RedisOptions): Redis {
+  return register(new Redis(REDIS_URL, options));
 }
 
 /**

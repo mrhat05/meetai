@@ -6,6 +6,7 @@ import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import db from '../../db.js';
 import { authMiddleware } from '../../middleware/authMiddleware.js';
+import { askRateLimit } from '../../middleware/rateLimit.js';
 import { emitToRoom } from '../socket/presence.ts';
 import { processMeetingMinutes, type UploadedTrack } from '../services/minutesPipeline.ts';
 import { enqueueMinutesJob } from '../queue/minutesQueue.ts';
@@ -497,7 +498,7 @@ router.get('/:roomCode/minutes', authMiddleware, async (req: Request, res: Respo
 });
 
 // POST /rooms/:roomCode/minutes/ask — Ask-AI grounded in this one meeting.
-router.post('/:roomCode/minutes/ask', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:roomCode/minutes/ask', authMiddleware, askRateLimit, async (req: Request, res: Response) => {
   try {
     const { roomCode } = req.params as { roomCode: string };
     const body = req.body as { question?: unknown; history?: unknown };

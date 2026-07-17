@@ -1,6 +1,8 @@
 services:
   postgres:
-    image: postgres:16
+    # pgvector-enabled Postgres 16 (drop-in) so `CREATE EXTENSION vector` in the
+    # migrations works locally, matching the managed pgvector Postgres in prod.
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: meetai
       POSTGRES_PASSWORD: meetai
