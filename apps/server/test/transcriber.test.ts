@@ -9,8 +9,9 @@
  *
  * The external Groq calls (Whisper transcription, Llama summarization/title/QA)
  * are stubbed via AI_STUB=1 so the test is deterministic, free, and offline.
- * It DOES use the real database (same DATABASE_URL as the app) and cleans up
- * after itself.
+ * It DOES use the real database (same DATABASE_URL as the app) and the real
+ * Redis-backed BullMQ pipeline (REDIS_URL — run `docker-compose up -d redis`
+ * first), and cleans up after itself.
  *
  * Run:  npm test                       (from apps/server)
  *       SHOW_MINUTES=1 npm test        also prints the stored transcript+summary
@@ -28,6 +29,11 @@ process.env.AI_STUB = '1';
 
 const { app } = (await import('../src/index.ts')) as { app: import('express').Express };
 const db = (await import('../db.ts')).default;
+// Same module instances the app uses (ESM cache) — needed for teardown: the
+// worker/queue hold open Redis connections that would keep node --test alive.
+const { stopMinutesWorker } = await import('../src/queue/minutesWorker.ts');
+const { minutesQueue } = await import('../src/queue/minutesQueue.ts');
+const { closeAllRedisConnections } = await import('../src/queue/connection.ts');
 
 // Never send real emails from the test suite: dotenv has loaded .env by now,
 // so drop the SMTP config — the mailer then logs previews instead of sending.
@@ -169,6 +175,11 @@ after(async () => {
       await db.user.deleteMany({ where: { id: { in: ids } } });
     }
   } finally {
+    await stopMinutesWorker().catch(() => { });
+    await minutesQueue.close().catch(() => { });
+    // BullMQ never closes externally-provided connections — do it here or the
+    // open sockets keep the node --test event loop alive forever.
+    await closeAllRedisConnections().catch(() => { });
     await db.$disconnect().catch(() => { });
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

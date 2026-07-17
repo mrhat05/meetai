@@ -1,5 +1,4 @@
 import { createReadStream } from 'node:fs';
-import { unlink } from 'node:fs/promises';
 import Groq from 'groq-sdk';
 
 const groqApiKey = process.env.GROQ_API_KEY?.trim();
@@ -29,15 +28,13 @@ function formatSecondsToMMSS(secondsValue: unknown): string {
 
 /**
  * Transcribes one audio file and returns raw timestamped segments.
- * Errors resolve to an empty array; the temp file is always deleted.
+ * An empty array means the audio genuinely contained no speech. Transient
+ * failures (Groq 429/5xx, network, missing key) THROW so the queue worker
+ * can retry the job. The caller owns the file's lifetime — it must survive
+ * across retry attempts and is deleted only once the whole job succeeds.
  */
 export async function transcribeAudioSegments(audioFilePath: string): Promise<TranscriptSegment[]> {
   if (process.env.AI_STUB === '1') {
-    try {
-      await unlink(audioFilePath);
-    } catch {
-      // ignore — the temp file may already be gone
-    }
     return STUB_SEGMENTS;
   }
 
@@ -65,13 +62,7 @@ export async function transcribeAudioSegments(audioFilePath: string): Promise<Tr
       .filter((segment) => segment.text.length > 0);
   } catch (error) {
     console.error('transcribeAudioSegments failed:', error);
-    return [];
-  } finally {
-    try {
-      await unlink(audioFilePath);
-    } catch (cleanupError) {
-      console.error('transcribeAudioSegments cleanup failed:', cleanupError);
-    }
+    throw error;
   }
 }
 

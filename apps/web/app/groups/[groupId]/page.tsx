@@ -84,6 +84,10 @@ function getInitials(name: string) {
   return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
 }
 
+// Mirrors the server's GET /groups/:groupId/minutes-status — the BullMQ job
+// state for the group's most recently ended meeting.
+type MinutesGenerationStatus = 'idle' | 'queued' | 'processing' | 'completed' | 'failed';
+
 export default function GroupDetailPage() {
   const router = useRouter();
   const params = useParams<{ groupId?: string | string[] }>();
@@ -113,6 +117,8 @@ export default function GroupDetailPage() {
   const [isMinutesModalOpen, setIsMinutesModalOpen] = useState(false);
   const [selectedMinutes, setSelectedMinutes] = useState<GroupMinutesDetail | null>(null);
   const [minutesReadyToast, setMinutesReadyToast] = useState<string | null>(null);
+  const [minutesStatus, setMinutesStatus] = useState<MinutesGenerationStatus>('idle');
+  const lastMinutesStatusRef = useRef<MinutesGenerationStatus>('idle');
 
   useEffect(() => {
     const accessToken = window.localStorage.getItem('accessToken');
@@ -166,6 +172,11 @@ export default function GroupDetailPage() {
     }
 
     setMinutesReadyToast(minutesReadyAlert.minutesId);
+    // The push means the job completed: clear any pending chip and invalidate
+    // the cached minutes list so the new entry appears without a reload.
+    setMinutesStatus('completed');
+    lastMinutesStatusRef.current = 'completed';
+    setHasLoadedMinutes(false);
   }, [groupId, minutesReadyAlert]);
 
   useEffect(() => {
@@ -375,6 +386,45 @@ export default function GroupDetailPage() {
 
     void fetchMinutes();
   }, [activeTab, groupId, hasLoadedMinutes]);
+
+  // Poll the queue-backed generation status while the Minutes tab is open, so
+  // members see "being generated… / failed" instead of a silent gap between a
+  // meeting ending and the minutes-ready push. Only keeps polling while a job
+  // is actually pending (queued/processing); one shot otherwise.
+  useEffect(() => {
+    if (!groupId || activeTab !== 'minutes') return undefined;
+
+    let cancelled = false;
+    let timeoutId: number | undefined;
+
+    const fetchStatus = async () => {
+      try {
+        const { data } = await api.get<{ status: MinutesGenerationStatus }>(`/groups/${groupId}/minutes-status`);
+        if (cancelled) return;
+
+        const wasPending = lastMinutesStatusRef.current === 'queued' || lastMinutesStatusRef.current === 'processing';
+        lastMinutesStatusRef.current = data.status;
+        setMinutesStatus(data.status);
+
+        if (wasPending && data.status === 'completed') {
+          // The job finished while we watched — refresh the minutes list.
+          setHasLoadedMinutes(false);
+        }
+        if (data.status === 'queued' || data.status === 'processing') {
+          timeoutId = window.setTimeout(() => void fetchStatus(), 5000);
+        }
+      } catch {
+        // Status is a progressive enhancement — never surface an error for it.
+      }
+    };
+
+    void fetchStatus();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) window.clearTimeout(timeoutId);
+    };
+  }, [activeTab, groupId]);
 
   const handleOpenMinutes = async (minutesId: string) => {
     if (!groupId) return;
@@ -687,6 +737,17 @@ export default function GroupDetailPage() {
                 </div>
               ) : (
                 <div role="tabpanel" id="workspace-panel-minutes" aria-labelledby="workspace-tab-minutes" className="mt-6">
+                  {(minutesStatus === 'queued' || minutesStatus === 'processing') && (
+                    <div className="mb-4 flex items-center gap-2.5 rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm font-medium text-amber-100">
+                      <span className="h-2 w-2 animate-pulse rounded-full bg-amber-300" aria-hidden="true" />
+                      Minutes for the latest meeting are being generated…
+                    </div>
+                  )}
+                  {minutesStatus === 'failed' && (
+                    <div className="mb-4 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+                      Minutes generation for the latest meeting failed after multiple retries.
+                    </div>
+                  )}
                   {isMinutesLoading ? (
                     <div className="space-y-3">
                       {[0, 1].map((n) => (

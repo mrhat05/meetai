@@ -12,8 +12,15 @@ services:
 
   redis:
     image: redis:7
+    # AOF persistence so queued jobs survive a Redis restart — the queue's
+    # durability story has to hold at every layer, not just in BullMQ.
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
     ports:
       - "6379:6379"
+    volumes:
+      - redisdata:/data
 
 volumes:
   pgdata:
+  redisdata:

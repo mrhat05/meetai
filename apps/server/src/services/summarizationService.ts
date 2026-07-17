@@ -9,8 +9,6 @@ type SummarizeMeetingInput = {
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-const FALLBACK_MARKDOWN = '## Summary\nSummary generation failed. Raw transcript is available below.';
-
 // Deterministic minutes used by the automated test suite (AI_STUB=1) so it
 // never hits the real Groq API.
 const STUB_SUMMARY = [
@@ -142,10 +140,16 @@ export async function summarizeMeeting({
     });
 
     const content = completion.choices[0]?.message?.content;
-    return typeof content === 'string' ? content : '';
+    if (typeof content !== 'string' || !content.trim()) {
+      throw new Error('Groq returned no summary content');
+    }
+    return content;
   } catch (error) {
+    // The summary is the core deliverable: a transient Groq failure (429/5xx)
+    // must fail the job so the queue worker retries with backoff, instead of
+    // permanently saving fallback junk that masquerades as success.
     console.error('summarizeMeeting failed:', error);
-    return FALLBACK_MARKDOWN;
+    throw error;
   }
 }
 

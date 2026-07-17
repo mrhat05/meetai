@@ -96,7 +96,7 @@ model Room {
   group     Group?        @relation(fields: [groupId], references: [id], onDelete: SetNull)
   participants Participant[]
   messages   Message[]
-  meetingMinutes MeetingMinute[]
+  meetingMinutes MeetingMinute?
 
   @@map("rooms")
 }
@@ -131,7 +131,7 @@ model Message {
 
 model MeetingMinute {
   id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  roomId           String   @map("room_id") @db.Uuid
+  roomId           String   @unique @map("room_id") @db.Uuid
   groupId          String   @map("group_id") @db.Uuid
   createdBy        String?  @map("created_by") @db.Uuid
   title            String   @db.VarChar(200)

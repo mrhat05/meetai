@@ -6,6 +6,7 @@ import { authMiddleware } from '../../middleware/authMiddleware.js';
 import { sendMeetingStartedEmail } from '../../lib/mailer.js';
 import { emitToUser } from '../socket/presence.ts';
 import { answerMinutesQuestion, type QaHistoryTurn } from '../services/minutesQaService.ts';
+import { minutesQueue } from '../queue/minutesQueue.ts';
 
 const router = Router();
 
@@ -394,6 +395,75 @@ router.get('/:groupId/minutes', authMiddleware, async (req: Request, res: Respon
       return res.status(400).json({ error: 'Invalid group id' });
     }
     return res.status(500).json({ error: 'Failed to fetch group minutes' });
+  }
+});
+
+// GET /groups/:groupId/minutes-status — Generation status of the group's most
+// recently ended meeting: idle | queued | processing | completed | failed.
+// Truth is layered: the DB row is authoritative for "completed"; otherwise the
+// BullMQ job (jobId = roomId) is asked for its state. A room that ended
+// without a summary job (plain /end, summarizer off) reads as idle.
+router.get('/:groupId/minutes-status', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { groupId } = req.params as { groupId: string };
+    const userId = req.user!.userId;
+
+    const memberships = await db.$queryRaw<Array<{ id: string }>>`
+      SELECT gm."id"
+      FROM "group_members" gm
+      WHERE gm."group_id"::text = ${groupId}
+        AND gm."user_id"::text = ${userId}
+      LIMIT 1
+    `;
+
+    if (!memberships[0]) {
+      return res.status(403).json({ error: 'Forbidden: you are not a member of this group' });
+    }
+
+    const recentRooms = await db.$queryRaw<Array<{ id: string; room_code: string }>>`
+      SELECT r."id", r."room_code"
+      FROM "rooms" r
+      WHERE r."group_id"::text = ${groupId}
+        AND r."ended_at" IS NOT NULL
+        AND r."ended_at" > NOW() - INTERVAL '24 hours'
+      ORDER BY r."ended_at" DESC
+      LIMIT 1
+    `;
+
+    const recentRoom = recentRooms[0];
+    if (!recentRoom) {
+      return res.json({ status: 'idle' });
+    }
+
+    const minutesRows = await db.$queryRaw<Array<{ id: string }>>`
+      SELECT mm."id" FROM "meeting_minutes" mm WHERE mm."room_id" = ${recentRoom.id}::uuid LIMIT 1
+    `;
+    if (minutesRows[0]) {
+      return res.json({ status: 'completed', roomCode: recentRoom.room_code, minutesId: minutesRows[0].id });
+    }
+
+    const job = await minutesQueue.getJob(recentRoom.id);
+    if (!job) {
+      return res.json({ status: 'idle' });
+    }
+
+    const state = await job.getState();
+    const status =
+      state === 'active'
+        ? 'processing'
+        : state === 'failed'
+          ? 'failed'
+          : state === 'completed'
+            ? 'processing' // job done but row not visible yet — next poll resolves it
+            : 'queued'; // waiting | delayed (between backoff retries) | prioritized
+
+    return res.json({ status, roomCode: recentRoom.room_code });
+  } catch (error: any) {
+    console.error('Error fetching group minutes status:', error);
+    if (error?.code === '22P02') {
+      return res.status(400).json({ error: 'Invalid group id' });
+    }
+    return res.status(500).json({ error: 'Failed to fetch minutes status' });
   }
 });
 
