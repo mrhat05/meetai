@@ -175,6 +175,41 @@ router.post('/create', authMiddleware, async (req: Request, res: Response) => {
   }
 });
 
+// PATCH /rooms/:roomCode — host-only room settings. Powers the lobby's AI-minutes
+// toggle for a normal meeting (group meetings inherit their group's flag).
+router.patch('/:roomCode', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { roomCode } = req.params as { roomCode: string };
+    const { summarizerEnabled } = req.body as { summarizerEnabled?: unknown };
+
+    const room = await (db as any).room.findUnique({
+      where: { roomCode },
+      include: { group: { select: { summarizerEnabled: true } } },
+    });
+    if (!room) {
+      return res.status(404).json({ error: 'Room not found' });
+    }
+    if (room.hostId !== req.user!.userId) {
+      return res.status(403).json({ error: 'Only the host can change meeting settings' });
+    }
+
+    const data: { summarizerEnabled?: boolean } = {};
+    if (typeof summarizerEnabled === 'boolean') {
+      data.summarizerEnabled = summarizerEnabled;
+    }
+    const updated = Object.keys(data).length
+      ? await (db as any).room.update({ where: { id: room.id }, data })
+      : room;
+
+    return res.json({
+      summarizer_enabled: Boolean(updated.summarizerEnabled || room.group?.summarizerEnabled),
+    });
+  } catch (error) {
+    console.error('Error updating room settings:', error);
+    return res.status(500).json({ error: 'Failed to update room settings' });
+  }
+});
+
 // GET /rooms/:roomCode — Fetch active room with host info
 router.get('/:roomCode', authMiddleware, async (req: Request, res: Response) => {
   try {

@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import RoomShell from '@/components/RoomShell';
+import PreJoinLobby from '@/components/PreJoinLobby';
+import type { JoinSettings } from '@/lib/joinSettings';
 
 export default function RoomPage() {
   const router = useRouter();
@@ -11,6 +13,8 @@ export default function RoomPage() {
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // null → still in the pre-join lobby; set once the user clicks "Join now".
+  const [joinSettings, setJoinSettings] = useState<JoinSettings | null>(null);
 
   useEffect(() => {
     const initializeRoom = () => {
@@ -69,5 +73,10 @@ export default function RoomPage() {
     return null;
   }
 
-  return <RoomShell roomCode={roomCode} />;
+  // Green room first — pick devices / mute state — then enter the call.
+  if (!joinSettings) {
+    return <PreJoinLobby roomCode={roomCode} onJoin={setJoinSettings} />;
+  }
+
+  return <RoomShell roomCode={roomCode} joinSettings={joinSettings} />;
 }

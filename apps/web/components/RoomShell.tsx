@@ -21,9 +21,11 @@ import useLocalStream from '@/hooks/useLocalStream';
 import useWebRTC from '@/hooks/useWebRTC';
 import useMeetingRecorder from '@/hooks/useMeetingRecorder';
 import VideoTile from '@/components/VideoTile';
+import type { JoinSettings } from '@/lib/joinSettings';
 
 type RoomShellProps = {
   roomCode: string;
+  joinSettings?: JoinSettings;
 };
 
 type RoomDetails = {
@@ -51,9 +53,9 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   }
 }
 
-export default function RoomShell({ roomCode }: RoomShellProps) {
+export default function RoomShell({ roomCode, joinSettings }: RoomShellProps) {
   const router = useRouter();
-  const { stream: localStream, isVideoOn, isAudioOn, mediaError, toggleVideo, toggleAudio } = useLocalStream();
+  const { stream: localStream, isVideoOn, isAudioOn, mediaError, toggleVideo, toggleAudio } = useLocalStream(joinSettings);
   const { peers, peerPresence, connectedPeerIds, messages, sendMessage, meetingEnded } = useWebRTC(roomCode, localStream, isVideoOn);
   const { startSession, addRemoteTrack, removeRemoteTrack, stopSession, isRecording } = useMeetingRecorder();
   const [isHost, setIsHost] = useState(false);
@@ -136,11 +138,11 @@ export default function RoomShell({ roomCode }: RoomShellProps) {
 
     recordingStartedRef.current = true;
 
-    void startSession(userDisplayName).catch((error) => {
+    void startSession(userDisplayName, joinSettings?.audioDeviceId).catch((error) => {
       recordingStartedRef.current = false;
       console.error('Failed to start audio recording', error);
     });
-  }, [isHost, startSession, summarizerEnabled, userDisplayName]);
+  }, [isHost, startSession, summarizerEnabled, userDisplayName, joinSettings?.audioDeviceId]);
 
   // Keep one audio recorder per remote speaker while the session is running.
   const recordedPeerIdsRef = useRef<Set<string>>(new Set());

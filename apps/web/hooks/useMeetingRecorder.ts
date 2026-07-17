@@ -23,7 +23,7 @@ const MAX_TRACKS = 10;
 const TIMESLICE_MS = 5000;
 
 type UseMeetingRecorderResult = {
-  startSession: (localSpeaker: string) => Promise<void>;
+  startSession: (localSpeaker: string, audioDeviceId?: string) => Promise<void>;
   addRemoteTrack: (peerId: string, stream: MediaStream, speaker: string) => void;
   removeRemoteTrack: (peerId: string) => void;
   stopSession: () => Promise<RecordedTrack[] | null>;
@@ -110,7 +110,7 @@ export default function useMeetingRecorder(): UseMeetingRecorderResult {
   }, []);
 
   const startSession = useCallback(
-    async (localSpeaker: string) => {
+    async (localSpeaker: string, audioDeviceId?: string) => {
       if (sessionStartRef.current !== null) {
         return;
       }
@@ -118,7 +118,12 @@ export default function useMeetingRecorder(): UseMeetingRecorderResult {
       sessionStartRef.current = Date.now();
       doneRef.current = [];
 
-      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      // Honor the mic the host picked in the lobby (its own stream, so the
+      // recording matches what participants hear).
+      const micStream = await navigator.mediaDevices.getUserMedia({
+        audio: audioDeviceId ? { deviceId: { ideal: audioDeviceId } } : true,
+        video: false,
+      });
       createTrackRecorder('local', micStream, localSpeaker, micStream);
       setIsRecording(true);
     },

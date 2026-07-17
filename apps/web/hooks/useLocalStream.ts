@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { JoinSettings } from '@/lib/joinSettings';
 
 type UseLocalStreamResult = {
   stream: MediaStream | null;
@@ -21,21 +22,38 @@ function syncTrackState(stream: MediaStream | null) {
   };
 }
 
-export default function useLocalStream(): UseLocalStreamResult {
+/** Applies the lobby's chosen initial mute/camera state to the acquired tracks. */
+function applyInitialState(stream: MediaStream, options?: Partial<JoinSettings>) {
+  if (options?.initialAudioOn === false) {
+    const audioTrack = stream.getAudioTracks()[0];
+    if (audioTrack) audioTrack.enabled = false;
+  }
+  if (options?.initialVideoOn === false) {
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) videoTrack.enabled = false;
+  }
+}
+
+export default function useLocalStream(options?: Partial<JoinSettings>): UseLocalStreamResult {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isVideoOn, setIsVideoOn] = useState(false);
   const [isAudioOn, setIsAudioOn] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  // Captured once — in the real flow the lobby has already fixed these before
+  // RoomShell (and thus this hook) mounts, so acquisition stays one-shot.
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   useEffect(() => {
     let isMounted = true;
+    const opts = optionsRef.current;
 
     const startStream = async () => {
       try {
         setMediaError(null);
         const mediaStream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true,
+          video: opts?.videoDeviceId ? { deviceId: { ideal: opts.videoDeviceId } } : true,
+          audio: opts?.audioDeviceId ? { deviceId: { ideal: opts.audioDeviceId } } : true,
         });
 
         if (!isMounted) {
@@ -43,6 +61,7 @@ export default function useLocalStream(): UseLocalStreamResult {
           return;
         }
 
+        applyInitialState(mediaStream, opts);
         setStream(mediaStream);
         const trackState = syncTrackState(mediaStream);
         setIsVideoOn(trackState.isVideoOn);
@@ -54,7 +73,7 @@ export default function useLocalStream(): UseLocalStreamResult {
         try {
           const fallbackStream = await navigator.mediaDevices.getUserMedia({
             video: false,
-            audio: true,
+            audio: opts?.audioDeviceId ? { deviceId: { ideal: opts.audioDeviceId } } : true,
           });
 
           if (!isMounted) {
@@ -62,6 +81,7 @@ export default function useLocalStream(): UseLocalStreamResult {
             return;
           }
 
+          applyInitialState(fallbackStream, opts);
           setStream(fallbackStream);
           const trackState = syncTrackState(fallbackStream);
           setIsVideoOn(trackState.isVideoOn);
